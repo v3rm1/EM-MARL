@@ -220,6 +220,98 @@ for agent in env.agent_iter(max_iter=1000):
 env.close()
 ```
 
+## Visualization
+
+### Basic Rendering
+
+```python
+from emmarl.envs import FireEnv
+
+env = FireEnv()
+env.reset()
+
+# Render a single frame
+img = env.render(mode="rgb_array")
+# img shape: (height, width, 3)
+
+env.close()
+```
+
+### Live Interactive Rendering
+
+```python
+import matplotlib.pyplot as plt
+from emmarl.envs import FireEnv
+
+env = FireEnv()
+env.reset()
+
+plt.ion()
+env.render(mode="human")
+plt.show()
+
+for _ in range(1000):
+    for agent in env.agents:
+        action = env.action_space(agent).sample()
+        env.step(action)
+    
+    env.render(mode="human")
+    plt.pause(0.01)
+
+env.close()
+```
+
+### Rendering with Metrics
+
+Enable metrics visualization to track agent status and performance over time:
+
+```python
+import matplotlib.pyplot as plt
+from emmarl.envs import FireEnv
+from emmarl.envs.render import RenderConfig
+
+config = RenderConfig(show_metrics=True)
+
+env = FireEnv()
+env._render_config = config
+env.reset()
+
+plt.ion()
+env.render(mode="human")
+plt.show()
+
+for _ in range(1000):
+    for agent in env.agents:
+        action = env.action_space(agent).sample()
+        env.step(action)
+    
+    env.render(mode="human")
+    plt.pause(0.01)
+
+env.close()
+```
+
+### Using GIS Maps
+
+```python
+from emmarl.envs import FireEnv
+from emmarl.envs.fire_env import FireEnvConfig
+from emmarl.envs.gis_map import create_default_gis_map
+
+gis_map = create_default_gis_map()
+config = FireEnvConfig(use_gis=True, gis_map=gis_map)
+
+env = FireEnv(config)
+env.reset()
+# ... run simulation
+```
+
+Or use the command-line tool:
+
+```bash
+python random_agents.py --gis
+```
+
 ## Integration with RL Libraries
 
 ### Basic Training Loop (Pseudo-code)

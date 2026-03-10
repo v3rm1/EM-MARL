@@ -24,6 +24,56 @@ for agent in env.agent_iter(max_iter=1000):
 env.close()
 ```
 
+## Visualization
+
+The environment provides two rendering modes: the **Emergency Map** (grid-based) and **GIS Map** (geographic information system with terrain, roads, and buildings).
+
+### Default EmergencyMap
+
+![EmergencyMap Default](../images/emergency_map_default.png)
+
+### GIS-Based Map
+
+![GIS Map Default](../images/gis_map_default.png)
+
+### Live Rendering with Metrics
+
+When running simulations, you can enable live rendering with real-time metrics:
+
+![EmergencyMap with Metrics](../images/emergency_map_with_metrics.png)
+
+The metrics panel shows:
+- **Agent Status Over Time**: Number of agents in each status category (Healthy, Injured, Affected, Critical, Deceased)
+- **Health, Stamina & Incidents**: Average health and stamina of agents, plus active and resolved incidents
+
+To enable live rendering:
+
+```python
+import matplotlib.pyplot as plt
+
+env = FireEnv()
+env.reset()
+
+plt.ion()
+env.render(mode="human")
+plt.show()
+
+for _ in range(1000):
+    for agent in env.agents:
+        action = env.action_space(agent).sample()
+        env.step(action)
+    env.render(mode="human")
+    plt.pause(0.01)
+
+env.close()
+```
+
+Use `--gis` flag with `random_agents.py` to use the GIS map:
+
+```bash
+python random_agents.py --gis
+```
+
 ## Configuration
 
 ### FireEnvConfig

@@ -2,10 +2,10 @@
 
 import numpy as np
 
-from firesim.envs import FireEnv, AgentType
-from firesim.envs.fire_env import FireEnvConfig
-from firesim.envs.agent import AgentConfig, AgentState, MovementConfig, AgentTypeConfig
-from firesim.envs.map import EmergencyMap, Incident, Zone, ZoneType, create_default_map
+from emmarl.envs import FireEnv, AgentType
+from emmarl.envs.fire_env import FireEnvConfig
+from emmarl.envs.agent import AgentConfig, AgentState, MovementConfig, AgentTypeConfig
+from emmarl.envs.map import EmergencyMap, Incident, Zone, ZoneType, create_default_map
 
 
 class TestFireEnvConfig:

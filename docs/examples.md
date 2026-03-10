@@ -6,7 +6,7 @@
 
 ```python
 import numpy as np
-from firesim.envs import FireEnv
+from emmarl.envs import FireEnv
 
 env = FireEnv()
 env.reset()
@@ -22,8 +22,8 @@ env.close()
 ### With Custom Configuration
 
 ```python
-from firesim.envs import FireEnv
-from firesim.envs.fire_env import FireEnvConfig
+from emmarl.envs import FireEnv
+from emmarl.envs.fire_env import FireEnvConfig
 
 config = FireEnvConfig(
     num_medics=3,
@@ -43,7 +43,7 @@ env.reset()
 
 ```python
 import numpy as np
-from firesim.envs import FireEnv
+from emmarl.envs import FireEnv
 
 class RandomPolicy:
     def __init__(self, env):
@@ -75,7 +75,7 @@ env.close()
 ### Gathering Observations
 
 ```python
-from firesim.envs import FireEnv
+from emmarl.envs import FireEnv
 import numpy as np
 
 env = FireEnv()
@@ -98,7 +98,7 @@ for agent in env.agent_iter():
 ### Reward Analysis
 
 ```python
-from firesim.envs import FireEnv
+from emmarl.envs import FireEnv
 from collections import defaultdict
 
 env = FireEnv()
@@ -125,9 +125,9 @@ env.close()
 ### Creating a Scenario
 
 ```python
-from firesim.envs import FireEnv
-from firesim.envs.fire_env import FireEnvConfig
-from firesim.envs.map import (
+from emmarl.envs import FireEnv
+from emmarl.envs.fire_env import FireEnvConfig
+from emmarl.envs.map import (
     EmergencyMap, Zone, Incident, ZoneType
 )
 
@@ -161,8 +161,8 @@ custom_map.add_incident(Incident(
 ### Inspect Agent State
 
 ```python
-from firesim.envs import FireEnv
-from firesim.envs import AgentType
+from emmarl.envs import FireEnv
+from emmarl.envs import AgentType
 
 env = FireEnv()
 env.reset()
@@ -192,7 +192,7 @@ env.close()
 ### Tracking Incidents
 
 ```python
-from firesim.envs import FireEnv
+from emmarl.envs import FireEnv
 
 env = FireEnv()
 env.reset()
@@ -225,7 +225,7 @@ env.close()
 ### Basic Training Loop (Pseudo-code)
 
 ```python
-from firesim.envs import FireEnv
+from emmarl.envs import FireEnv
 import torch
 
 env = FireEnv()
@@ -259,7 +259,7 @@ env.close()
 
 ```python
 import numpy as np
-from firesim.envs import FireEnv
+from emmarl.envs import FireEnv
 
 env = FireEnv()
 env.reset()

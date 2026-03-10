@@ -1,6 +1,6 @@
 # Map System
 
-FireSim uses a continuous coordinate map system rather than a gridworld, allowing for more realistic movement and spatial relationships.
+FireSim supports two map systems: a simple **EmergencyMap** and a GIS-based **GISMap** with advanced geospatial features.
 
 ## Coordinate System
 
@@ -15,12 +15,29 @@ FireSim uses a continuous coordinate map system rather than a gridworld, allowin
 (1000, 1000) # Top-right corner
 ```
 
+## Map Selection
+
+Choose between map types using the `use_gis` configuration flag:
+
+```python
+from emmarl.envs import FireEnv
+from emmarl.envs.fire_env import FireEnvConfig
+
+# Default: Use EmergencyMap
+config = FireEnvConfig(use_gis=False)
+env = FireEnv(config)
+
+# GIS-based map
+config = FireEnvConfig(use_gis=True)
+env = FireEnv(config)
+```
+
 ## EmergencyMap
 
 The `EmergencyMap` class manages the simulation space:
 
 ```python
-from firesim.envs.map import EmergencyMap
+from emmarl.envs.map import EmergencyMap
 
 emergency_map = EmergencyMap(
     width=1000.0,
@@ -38,7 +55,7 @@ Zones represent geographic areas with specific properties:
 ### Zone Types
 
 ```python
-from firesim.envs.map import ZoneType
+from emmarl.envs.map import ZoneType
 
 SAFE            # Safe area
 FIRE            # Fire hazard
@@ -54,7 +71,7 @@ BUILDING        # Building structure
 ### Creating Zones
 
 ```python
-from firesim.envs.map import Zone, ZoneType
+from emmarl.envs.map import Zone, ZoneType
 
 fire_zone = Zone(
     zone_id="fire_1",
@@ -86,7 +103,7 @@ Incidents are dynamic events that agents must resolve:
 ### Creating Incidents
 
 ```python
-from firesim.envs.map import Incident, ZoneType
+from emmarl.envs.map import Incident, ZoneType
 
 fire_incident = Incident(
     incident_id="fire_1",
@@ -162,7 +179,7 @@ emergency_map.is_path_clear((50, 150), (250, 150))  # False
 Create a default emergency scenario:
 
 ```python
-from firesim.envs.map import create_default_map
+from emmarl.envs.map import create_default_map
 
 emergency_map = create_default_map(
     width=1000.0,
@@ -179,7 +196,7 @@ emergency_map = create_default_map(
 Build custom scenarios:
 
 ```python
-from firesim.envs.map import EmergencyMap, Zone, Incident, ZoneType
+from emmarl.envs.map import EmergencyMap, Zone, Incident, ZoneType
 
 custom_map = EmergencyMap(width=2000.0, height=2000.0)
 
@@ -207,12 +224,321 @@ custom_map.add_incident(Incident(
 Pass custom maps to FireEnv:
 
 ```python
-from firesim.envs import FireEnv
-from firesim.envs.fire_env import FireEnvConfig
+from emmarl.envs import FireEnv
+from emmarl.envs.fire_env import FireEnvConfig
 
 config = FireEnvConfig(map_width=2000.0, map_height=2000.0)
 env = FireEnv(config)
 
 # Access the map
 env._emergency_map
+```
+
+---
+
+# GIS-Based Map System
+
+The `GISMap` class provides advanced GIS features using Shapely for geometry operations.
+
+## Overview
+
+GISMap uses geographic coordinate-based geometry (points, lines, polygons) instead of simple rectangular zones:
+
+```python
+from emmarl.envs.gis_map import GISMap
+
+gis_map = GISMap(
+    bounds=(0.0, 0.0, 1000.0, 1000.0),
+    buildings=[],
+    roads=[],
+    terrain_zones=[],
+    fire_zones=[],
+)
+```
+
+## Terrain Types
+
+```python
+from emmarl.envs.gis_map import TerrainType
+
+WATER          # Water bodies
+FOREST         # Forest areas (high fuel load)
+GRASS          # Grassland
+URBAN          # Urban areas
+ROAD           # Roads
+BUILDING       # Buildings
+PARKLAND       # Parks
+AGRICULTURAL   # Farmland
+BURNED         # Burned areas
+```
+
+## Road Types
+
+```python
+from emmarl.envs.gis_map import RoadType
+
+HIGHWAY        # Highway/motorway
+PRIMARY        # Primary roads
+SECONDARY      # Secondary roads
+RESIDENTIAL    # Residential streets
+PATH           # Footpaths/trails
+```
+
+## Buildings
+
+Create building footprints with Shapely polygons:
+
+```python
+from shapely.geometry import Polygon
+from emmarl.envs.gis_map import Building
+
+building = Building(
+    building_id="building_1",
+    polygon=Polygon([(150, 150), (200, 150), (200, 200), (150, 200)]),
+    height=15.0,
+    floors=3,
+    building_type="residential",
+    fire_resistance=0.5,
+)
+```
+
+## Roads
+
+Create road segments as line strings:
+
+```python
+from shapely.geometry import LineString
+from emmarl.envs.gis_map import Road, RoadType
+
+road = Road(
+    road_id="road_1",
+    line=LineString([(50, 200), (350, 200)]),
+    road_type=RoadType.PRIMARY,
+    name="Main Street",
+    lanes=2,
+    one_way=False,
+)
+```
+
+## Terrain Zones
+
+Create terrain with fuel and moisture properties:
+
+```python
+from shapely.geometry import Polygon
+from emmarl.envs.gis_map import TerrainZone, TerrainType
+
+terrain = TerrainZone(
+    zone_id="forest_1",
+    polygon=Polygon([(100, 100), (300, 100), (300, 300), (100, 300)]),
+    terrain_type=TerrainType.FOREST,
+    fuel_load=0.9,
+    moisture_content=0.2,
+)
+```
+
+## Fire Zones
+
+Fire zones track active fires with intensity:
+
+```python
+from shapely.geometry import Polygon
+from emmarl.envs.gis_map import FireZone
+
+fire = FireZone(
+    zone_id="fire_1",
+    polygon=Polygon([(120, 120), (180, 120), (180, 180), (120, 180)]),
+    fire_intensity=0.8,
+    is_contained=False,
+)
+```
+
+## Query Methods
+
+### Terrain at Point
+
+```python
+terrain = gis_map.get_terrain_at((150.0, 150.0))
+# Returns: TerrainType or None
+```
+
+### Building at Point
+
+```python
+building = gis_map.get_building_at((175.0, 175.0))
+# Returns: Building or None
+```
+
+### On Road Check
+
+```python
+is_on_road = gis_map.is_on_road((200.0, 200.0), buffer=5.0)
+# Returns: bool
+```
+
+### Fire Intensity
+
+```python
+intensity = gis_map.get_fire_intensity_at((150.0, 150.0))
+# Returns: float (0.0 - 1.0)
+```
+
+### Danger Level
+
+```python
+danger = gis_map.get_danger_level((150.0, 150.0))
+# Returns: float (0.0 - 1.0)
+# Considers: fire intensity, terrain type, building presence
+```
+
+### Nearest Road/Building
+
+```python
+road, dist = gis_map.get_nearest_road((500.0, 500.0))
+building, dist = gis_map.get_nearest_building((500.0, 500.0))
+```
+
+## Default GIS Map
+
+Create a default GIS map with preset terrain, buildings, roads, and fires:
+
+```python
+from emmarl.envs.gis_map import create_default_gis_map
+
+gis_map = create_default_gis_map()
+# Contains:
+# - 3 terrain zones (forest, grass, parkland)
+# - 3 buildings
+# - 3 roads
+# - 1 fire zone
+```
+
+## Custom GIS Map
+
+Build custom GIS scenarios:
+
+```python
+from shapely.geometry import Polygon
+from emmarl.envs.gis_map import (
+    GISMap, Building, Road, TerrainZone, FireZone,
+    TerrainType, RoadType
+)
+
+gis_map = GISMap(bounds=(0.0, 0.0, 2000.0, 2000.0))
+
+# Add terrain
+gis_map.add_terrain_zone(TerrainZone(
+    zone_id="forest_1",
+    polygon=Polygon([(100, 100), (500, 100), (500, 500), (100, 500)]),
+    terrain_type=TerrainType.FOREST,
+    fuel_load=0.9,
+))
+
+# Add building
+gis_map.add_building(Building(
+    building_id="building_1",
+    polygon=Polygon([(200, 200), (250, 200), (250, 250), (200, 250)]),
+    height=20.0,
+))
+
+# Add road
+gis_map.add_road(Road(
+    road_id="road_1",
+    line=LineString([(0, 300), (1000, 300)]),
+    road_type=RoadType.PRIMARY,
+))
+
+# Add fire
+gis_map.add_fire_zone(FireZone(
+    zone_id="fire_1",
+    polygon=Polygon([(150, 150), (200, 150), (200, 200), (150, 200)]),
+    fire_intensity=0.8,
+))
+```
+
+## GeoJSON Support
+
+### Export to GeoJSON
+
+```python
+geojson = gis_map.to_geojson()
+# Returns dict with FeatureCollection
+```
+
+### Load from GeoJSON
+
+```python
+from emmarl.envs.gis_map import load_geojson
+
+gis_map = load_geojson("scenario.geojson")
+```
+
+## OpenStreetMap Integration
+
+You can create GIS maps directly from OpenStreetMap data for real-world locations:
+
+### From Place Name
+
+```python
+from emmarl.envs.gis_map import create_gis_map_from_osm
+
+# Query by city/region name
+gis_map = create_gis_map_from_osm("Athens, Greece")
+gis_map = create_gis_map_from_osm("Attica, Greece")
+```
+
+### From Bounding Box
+
+```python
+# North, South, East, West coordinates
+gis_map = create_gis_map_from_osm(
+    north=38.3,
+    south=37.7,
+    east=24.0,
+    west=23.4,
+)
+```
+
+### Attica WUI Preset
+
+For the Wildland-Urban Interface of Attica region:
+
+```python
+from emmarl.envs.gis_map import create_wui_attica_map
+
+gis_map = create_wui_attica_map()
+# Downloads OSM data for: bounds (23.4, 37.7) to (24.0, 38.3)
+```
+
+### Integration with FireEnv
+
+```python
+from emmarl.envs import FireEnv
+from emmarl.envs.fire_env import FireEnvConfig
+from emmarl.envs.gis_map import create_gis_map_from_osm
+
+gis_map = create_gis_map_from_osm("Attica, Greece")
+config = FireEnvConfig(use_gis=True, gis_map=gis_map)
+env = FireEnv(config)
+env.reset()
+```
+
+**Note:** The first time you call OSM functions, it will download data which may take a while. Subsequent calls use cached data.
+
+## Integration with FireEnv
+
+Pass custom GIS maps to FireEnv:
+
+```python
+from emmarl.envs import FireEnv
+from emmarl.envs.fire_env import FireEnvConfig
+from emmarl.envs.gis_map import create_default_gis_map
+
+gis_map = create_default_gis_map()
+config = FireEnvConfig(use_gis=True, gis_map=gis_map)
+env = FireEnv(config)
+
+# Access the GIS map
+env._gis_map
+env._emergency_map  # None when use_gis=True
 ```

@@ -11,9 +11,10 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import networkx as nx
 
-from firesim.envs.agent import AgentState, AgentType
-from firesim.envs.map import EmergencyMap, ZoneType
-from firesim.envs.gis_map import GISMap, TerrainType, RoadType
+from emmarl.envs.agent import AgentState, AgentType
+from emmarl.envs.map import EmergencyMap, ZoneType
+from emmarl.envs.gis_map import GISMap, TerrainType, RoadType
+from emmarl.envs.metrics import EpisodeMetrics
 
 
 class RenderMode(Enum):
@@ -28,7 +29,7 @@ class RenderMode(Enum):
 class RenderConfig:
     """Configuration for rendering."""
 
-    figure_size: tuple[int, int] = (14, 6)
+    figure_size: tuple[int, int] = (14, 10)
     map_dpi: int = 100
     graph_dpi: int = 100
     show_grid: bool = True
@@ -36,6 +37,8 @@ class RenderConfig:
     agent_marker_size: int = 100
     zone_alpha: float = 0.3
     incident_alpha: float = 0.6
+    show_metrics: bool = True
+    metrics_height: float = 0.25
 
 
 @dataclass
@@ -65,6 +68,8 @@ class FireSimRenderer:
         self._fig: plt.Figure | None = None
         self._ax_map: plt.Axes | None = None
         self._ax_graph: plt.Axes | None = None
+        self._ax_metrics1: plt.Axes | None = None
+        self._ax_metrics2: plt.Axes | None = None
 
         self._agent_colors = {
             AgentType.MEDIC: "#2ecc71",
@@ -117,6 +122,7 @@ class FireSimRenderer:
         mode: RenderMode = RenderMode.BOTH,
         graph_filter: GraphFilter | None = None,
         interactive: bool = False,
+        episode_metrics: EpisodeMetrics | None = None,
     ) -> np.ndarray:
         """Render the environment.
 
@@ -133,20 +139,60 @@ class FireSimRenderer:
             Rendered image as numpy array
         """
         is_gis = isinstance(emergency_map, GISMap)
+        has_metrics_data = (
+            episode_metrics is not None and len(episode_metrics.steps) > 0
+        )
+        show_metrics = self.config.show_metrics and has_metrics_data
+
+        needs_new_figure = False
+
         if not interactive or self._fig is None:
+            needs_new_figure = True
+        elif self._fig is not None:
+            current_has_metrics = self._ax_metrics1 is not None
+            if current_has_metrics != show_metrics:
+                needs_new_figure = True
+
+        if needs_new_figure:
             if self._fig is not None:
                 plt.close(self._fig)
 
             if mode == RenderMode.BOTH:
-                self._fig, (self._ax_map, self._ax_graph) = plt.subplots(
-                    1, 2, figsize=self.config.figure_size
-                )
+                if show_metrics:
+                    self._fig = plt.figure(figsize=self.config.figure_size)
+                    gs = self._fig.add_gridspec(
+                        2, 2, height_ratios=[1, 0.4], hspace=0.3, wspace=0.2
+                    )
+                    self._ax_map = self._fig.add_subplot(gs[0, 0])
+                    self._ax_graph = self._fig.add_subplot(gs[0, 1])
+                    self._ax_metrics1 = self._fig.add_subplot(gs[1, 0])
+                    self._ax_metrics2 = self._fig.add_subplot(gs[1, 1])
+                else:
+                    self._fig, (self._ax_map, self._ax_graph) = plt.subplots(
+                        1, 2, figsize=self.config.figure_size
+                    )
+                    self._ax_metrics1 = None
+                    self._ax_metrics2 = None
             elif mode == RenderMode.MAP:
                 self._fig, self._ax_map = plt.subplots(figsize=(8, 8))
                 self._ax_graph = None
+                self._ax_metrics1 = None
+                self._ax_metrics2 = None
             elif mode == RenderMode.GRAPH:
-                self._fig, self._ax_graph = plt.subplots(figsize=(8, 8))
-                self._ax_map = None
+                if show_metrics:
+                    self._fig = plt.figure(figsize=(8, 10))
+                    gs = self._fig.add_gridspec(
+                        2, 1, height_ratios=[1, 0.4], hspace=0.3
+                    )
+                    self._ax_graph = self._fig.add_subplot(gs[0, 0])
+                    self._ax_map = None
+                    self._ax_metrics1 = self._fig.add_subplot(gs[1, 0])
+                    self._ax_metrics2 = None
+                else:
+                    self._fig, self._ax_graph = plt.subplots(figsize=(8, 8))
+                    self._ax_map = None
+                    self._ax_metrics1 = None
+                    self._ax_metrics2 = None
         else:
             if (
                 mode == RenderMode.BOTH
@@ -155,10 +201,15 @@ class FireSimRenderer:
             ):
                 self._ax_map.cla()
                 self._ax_graph.cla()
+                if show_metrics and self._ax_metrics1 is not None:
+                    self._ax_metrics1.cla()
+                    self._ax_metrics2.cla()
             elif mode == RenderMode.MAP and self._ax_map is not None:
                 self._ax_map.cla()
             elif mode == RenderMode.GRAPH and self._ax_graph is not None:
                 self._ax_graph.cla()
+                if show_metrics and self._ax_metrics1 is not None:
+                    self._ax_metrics1.cla()
 
         if mode == RenderMode.BOTH:
             if is_gis:
@@ -168,6 +219,8 @@ class FireSimRenderer:
             self._render_graph(
                 emergency_map, agent_states, agent_types, agent_configs, graph_filter
             )
+            if show_metrics:
+                self._render_metrics(episode_metrics)
             plt.tight_layout()
         elif mode == RenderMode.MAP:
             if is_gis:
@@ -178,6 +231,8 @@ class FireSimRenderer:
             self._render_graph(
                 emergency_map, agent_states, agent_types, agent_configs, graph_filter
             )
+            if show_metrics:
+                self._render_metrics(episode_metrics)
 
         if interactive:
             self._fig.canvas.draw()
@@ -784,6 +839,95 @@ class FireSimRenderer:
             framealpha=0.9,
         )
 
+    def _render_metrics(self, episode_metrics: EpisodeMetrics) -> None:
+        """Render metrics plots under the network graph."""
+        if episode_metrics is None or len(episode_metrics.steps) == 0:
+            return
+
+        steps = episode_metrics.steps
+        self._render_status_counts(steps, episode_metrics)
+        self._render_health_stamina(steps, episode_metrics)
+
+    def _render_status_counts(
+        self, steps: list[int], episode_metrics: EpisodeMetrics
+    ) -> None:
+        """Render agent status counts over time."""
+        if self._ax_metrics1 is None:
+            return
+
+        self._ax_metrics1.set_title("Agent Status Over Time", fontsize=10)
+        self._ax_metrics1.set_xlabel("Step", fontsize=8)
+        self._ax_metrics1.set_ylabel("Count", fontsize=8)
+
+        status_colors = {
+            "HEALTHY": "#2ecc71",
+            "INJURED": "#f39c12",
+            "AFFECTED": "#e67e22",
+            "CRITICAL": "#e74c3c",
+            "DECEASED": "#7f8c8d",
+            "SURVIVED": "#3498db",
+            "EVACUATED": "#1abc9c",
+            "RESCUED": "#9b59b6",
+        }
+
+        for status, counts in episode_metrics.status_counts.items():
+            if status.name in status_colors and any(c > 0 for c in counts):
+                self._ax_metrics1.plot(
+                    steps,
+                    counts,
+                    label=status.name,
+                    color=status_colors[status.name],
+                    linewidth=1.5,
+                )
+
+        self._ax_metrics1.legend(loc="upper right", fontsize=7)
+        self._ax_metrics1.grid(True, alpha=0.3)
+
+    def _render_health_stamina(
+        self, steps: list[int], episode_metrics: EpisodeMetrics
+    ) -> None:
+        """Render health, stamina, and incident metrics over time."""
+        if self._ax_metrics2 is None:
+            return
+
+        self._ax_metrics2.set_title("Health, Stamina & Incidents", fontsize=10)
+        self._ax_metrics2.set_xlabel("Step", fontsize=8)
+        self._ax_metrics2.set_ylabel("Value", fontsize=8)
+
+        self._ax_metrics2.plot(
+            steps,
+            episode_metrics.avg_health,
+            label="Avg Health",
+            color="#e74c3c",
+            linewidth=1.5,
+        )
+        self._ax_metrics2.plot(
+            steps,
+            episode_metrics.avg_stamina,
+            label="Avg Stamina",
+            color="#3498db",
+            linewidth=1.5,
+        )
+        self._ax_metrics2.plot(
+            steps,
+            episode_metrics.active_incidents,
+            label="Active Incidents",
+            color="#f39c12",
+            linewidth=1.5,
+            linestyle="--",
+        )
+        self._ax_metrics2.plot(
+            steps,
+            episode_metrics.resolved_incidents,
+            label="Resolved Incidents",
+            color="#2ecc71",
+            linewidth=1.5,
+            linestyle="--",
+        )
+
+        self._ax_metrics2.legend(loc="upper right", fontsize=7)
+        self._ax_metrics2.grid(True, alpha=0.3)
+
     def close(self) -> None:
         """Close the rendering figure."""
         if self._fig is not None:
@@ -791,6 +935,8 @@ class FireSimRenderer:
             self._fig = None
             self._ax_map = None
             self._ax_graph = None
+            self._ax_metrics1 = None
+            self._ax_metrics2 = None
 
     def save(self, filepath: str, **kwargs) -> None:
         """Save rendered image to file."""

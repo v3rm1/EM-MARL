@@ -7,7 +7,7 @@
 ## Basic Usage
 
 ```python
-from firesim.envs import FireEnv
+from emmarl.envs import FireEnv
 
 # Create environment with default config
 env = FireEnv()
@@ -31,7 +31,7 @@ env.close()
 Customize the environment with `FireEnvConfig`:
 
 ```python
-from firesim.envs.fire_env import FireEnvConfig
+from emmarl.envs.fire_env import FireEnvConfig
 
 config = FireEnvConfig(
     num_medics=3,
@@ -66,6 +66,9 @@ env = FireEnv(config)
 | `max_steps` | int | 1000 | Maximum episode length |
 | `agent_speed` | float | 10.0 | Base agent movement speed |
 | `agent_vision_radius` | float | 100.0 | Agent observation radius |
+| `use_gis` | bool | False | Use GIS-based map system |
+| `gis_map` | GISMap | None | Custom GIS map (when use_gis=True) |
+| `reward_weights` | dict | {...} | Reward function weights |
 
 ## Agent Types
 

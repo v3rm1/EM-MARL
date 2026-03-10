@@ -15,6 +15,19 @@ class AgentType(Enum):
     CIVILIAN = auto()
 
 
+class AgentStatus(Enum):
+    """Health/operational status of agents."""
+
+    HEALTHY = auto()
+    INJURED = auto()
+    AFFECTED = auto()  # Affected by smoke/heat
+    CRITICAL = auto()
+    DECEASED = auto()
+    SURVIVED = auto()
+    EVACUATED = auto()
+    RESCUED = auto()
+
+
 @dataclass
 class MovementConfig:
     """Movement configuration for an agent type."""
@@ -121,6 +134,7 @@ class AgentState:
     health: float = 100.0
     stamina: float = 100.0
     status: str = "active"
+    agent_status: AgentStatus = AgentStatus.HEALTHY
     carrying: dict[str, float] | None = None
     target: tuple[float, float] | None = None
     action_taken: bool = False
@@ -128,6 +142,11 @@ class AgentState:
     is_running: bool = False
     is_moving: bool = False
     distance_traveled: float = 0.0
+    smoke_exposure: float = 0.0
+    heat_exposure: float = 0.0
+    time_in_fire: float = 0.0
+    rescued: bool = False
+    evacuated: bool = False
 
     def __post_init__(self) -> None:
         if self.carrying is None:
@@ -135,7 +154,7 @@ class AgentState:
 
     def is_alive(self) -> bool:
         """Check if agent is alive."""
-        return self.health > 0 and self.status != "dead"
+        return self.health > 0 and self.agent_status != AgentStatus.DECEASED
 
     def is_exhausted(self) -> bool:
         """Check if agent is exhausted."""
@@ -145,7 +164,77 @@ class AgentState:
         """Take damage."""
         self.health = max(0.0, self.health - damage)
         if self.health <= 0:
-            self.status = "dead"
+            self.agent_status = AgentStatus.DECEASED
+        elif self.health < 30:
+            self.agent_status = AgentStatus.CRITICAL
+        elif self.health < 60:
+            self.agent_status = AgentStatus.INJURED
+
+    def take_fire_damage(self, fire_intensity: float, dt: float) -> None:
+        """Take damage from fire exposure.
+
+        Args:
+            fire_intensity: Fire intensity (0-1)
+            dt: Time step
+        """
+        damage_rate = fire_intensity * 50.0
+        self.take_damage(damage_rate * dt)
+        self.time_in_fire += dt
+
+    def take_smoke_damage(self, smoke_density: float, dt: float) -> None:
+        """Take damage from smoke inhalation.
+
+        Args:
+            smoke_density: Smoke density (0-1)
+            dt: Time step
+        """
+        damage_rate = smoke_density * 20.0
+        self.take_damage(damage_rate * dt)
+        self.smoke_exposure += smoke_density * dt
+
+    def take_heat_damage(self, heat_intensity: float, dt: float) -> None:
+        """Take damage from heat exposure.
+
+        Args:
+            heat_intensity: Heat intensity (0-1)
+            dt: Time step
+        """
+        damage_rate = heat_intensity * 30.0
+        self.take_damage(damage_rate * dt)
+        self.heat_exposure += heat_intensity * dt
+
+    def update_status(self) -> None:
+        """Update agent status based on health and conditions."""
+        if self.agent_status == AgentStatus.DECEASED:
+            return
+
+        if self.health <= 0:
+            self.agent_status = AgentStatus.DECEASED
+        elif self.health < 20:
+            self.agent_status = AgentStatus.CRITICAL
+        elif self.health < 50:
+            self.agent_status = AgentStatus.INJURED
+        elif self.smoke_exposure > 10 or self.heat_exposure > 5:
+            self.agent_status = AgentStatus.AFFECTED
+        else:
+            self.agent_status = AgentStatus.HEALTHY
+
+    def mark_survived(self) -> None:
+        """Mark agent as survived."""
+        if self.is_alive():
+            self.agent_status = AgentStatus.SURVIVED
+
+    def mark_evacuated(self) -> None:
+        """Mark agent as evacuated."""
+        if self.is_alive():
+            self.evacuated = True
+            self.agent_status = AgentStatus.EVACUATED
+
+    def mark_rescued(self) -> None:
+        """Mark agent as rescued."""
+        if self.is_alive():
+            self.rescued = True
+            self.agent_status = AgentStatus.RESCUED
 
     def use_stamina(self, amount: float) -> bool:
         """Use stamina, returns True if successful."""
@@ -161,6 +250,7 @@ class AgentState:
     def heal(self, amount: float) -> None:
         """Heal the agent."""
         self.health = min(100.0, self.health + amount)
+        self.update_status()
 
     def get_speed(self) -> float:
         """Get current speed (magnitude of velocity)."""

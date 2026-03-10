@@ -7,7 +7,7 @@
 Main environment class implementing PettingZoo AEC API.
 
 ```python
-from firesim.envs import FireEnv
+from emmarl.envs import FireEnv
 ```
 
 #### Constructor
@@ -76,7 +76,7 @@ Get observation space for an agent.
 Configuration for FireEnv.
 
 ```python
-from firesim.envs.fire_env import FireEnvConfig
+from emmarl.envs.fire_env import FireEnvConfig
 ```
 
 #### Fields
@@ -103,7 +103,7 @@ from firesim.envs.fire_env import FireEnvConfig
 Enum for agent types.
 
 ```python
-from firesim.envs import AgentType
+from emmarl.envs import AgentType
 
 AgentType.MEDIC
 AgentType.FIRE_FORCE
@@ -116,7 +116,7 @@ AgentType.CIVILIAN
 Configuration for a single agent.
 
 ```python
-from firesim.envs.agent import AgentConfig
+from emmarl.envs.agent import AgentConfig
 
 config = AgentConfig(
     agent_type=AgentType.MEDIC,
@@ -145,7 +145,7 @@ config = AgentConfig(
 Mutable state for an agent.
 
 ```python
-from firesim.envs.agent import AgentState
+from emmarl.envs.agent import AgentState
 
 state = AgentState(
     position=(100.0, 200.0),
@@ -171,7 +171,7 @@ state = AgentState(
 Movement parameters.
 
 ```python
-from firesim.envs.agent import MovementConfig
+from emmarl.envs.agent import MovementConfig
 
 config = MovementConfig(
     max_speed=10.0,
@@ -189,7 +189,7 @@ config = MovementConfig(
 Pre-defined configs for each agent type.
 
 ```python
-from firesim.envs.agent import AgentTypeConfig
+from emmarl.envs.agent import AgentTypeConfig
 
 AgentTypeConfig.MEDIC
 AgentTypeConfig.FIRE_FORCE
@@ -206,7 +206,7 @@ AgentTypeConfig.CIVILIAN
 The simulation map.
 
 ```python
-from firesim.envs.map import EmergencyMap
+from emmarl.envs.map import EmergencyMap
 
 emap = EmergencyMap(width=1000.0, height=1000.0)
 ```
@@ -228,7 +228,7 @@ emap = EmergencyMap(width=1000.0, height=1000.0)
 A geographic zone.
 
 ```python
-from firesim.envs.map import Zone, ZoneType
+from emmarl.envs.map import Zone, ZoneType
 
 zone = Zone(
     zone_id="fire_1",
@@ -250,7 +250,7 @@ zone = Zone(
 A dynamic event.
 
 ```python
-from firesim.envs.map import Incident, ZoneType
+from emmarl.envs.map import Incident, ZoneType
 
 incident = Incident(
     incident_id="fire_1",
@@ -271,7 +271,7 @@ incident = Incident(
 Enum for zone/incident types.
 
 ```python
-from firesim.envs.map import ZoneType
+from emmarl.envs.map import ZoneType
 
 ZoneType.SAFE
 ZoneType.FIRE
@@ -289,7 +289,7 @@ ZoneType.BUILDING
 Create a default emergency scenario.
 
 ```python
-from firesim.envs.map import create_default_map
+from emmarl.envs.map import create_default_map
 
 emap = create_default_map(width=1000.0, height=1000.0)
 ```

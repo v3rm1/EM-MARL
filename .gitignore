@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+cache
 *.py[codz]
 *$py.class
 
@@ -58,3 +59,4 @@ random_agents.py
 pyproject.toml
 *.pyc
 Dockerfile
+osm_artefacts

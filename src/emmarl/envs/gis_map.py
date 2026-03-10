@@ -4,18 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any
 
 import numpy as np
+import pandas as pd
 from shapely.geometry import (
     Point,
     LineString,
     Polygon,
-    MultiPolygon,
     shape,
     mapping,
 )
-from shapely.ops import unary_union
 
 
 class TerrainType(Enum):
@@ -207,6 +205,98 @@ class GISMap:
     def distance_to_nearest_building(self, point: tuple[float, float]) -> float:
         _, dist = self.get_nearest_building(point)
         return dist
+
+    def get_nearest_road_point(
+        self, point: tuple[float, float]
+    ) -> tuple[tuple[float, float] | None, float]:
+        """Get the nearest point on any road to the given point."""
+        if not self.roads:
+            return None, float("inf")
+
+        min_dist = float("inf")
+        nearest_point = None
+
+        p = Point(point)
+        for road in self.roads:
+            nearest = road.line.interpolate(road.line.project(p))
+            dist = p.distance(nearest)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_point = (nearest.x, nearest.y)
+
+        return nearest_point, min_dist
+
+    def find_path_on_roads(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        max_distance: float = 50.0,
+    ) -> list[tuple[float, float]] | None:
+        """Find a path between two points using roads.
+
+        Returns a list of points representing the path, or None if no path found.
+        """
+        if not self.roads:
+            return None
+
+        start_point, start_dist = self.get_nearest_road_point(start)
+        end_point, end_dist = self.get_nearest_road_point(end)
+
+        if start_point is None or end_point is None:
+            return None
+        if start_dist > max_distance or end_dist > max_distance:
+            return None
+
+        return [start, start_point, end_point, end]
+
+    def distance_to_fire(
+        self, point: tuple[float, float], max_range: float = 500.0
+    ) -> tuple[float, tuple[float, float] | None]:
+        """Get distance to nearest fire and its position.
+
+        Args:
+            point: The point to check from
+            max_range: Maximum range to consider
+
+        Returns:
+            Tuple of (distance, fire_position)
+        """
+        if not self.fire_zones:
+            return float("inf"), None
+
+        min_dist = float("inf")
+        nearest_fire = None
+        p = Point(point)
+
+        for fire_zone in self.fire_zones:
+            if fire_zone.is_contained:
+                continue
+            centroid = fire_zone.polygon.centroid
+            dist = p.distance(centroid)
+            if dist < min_dist and dist <= max_range:
+                min_dist = dist
+                nearest_fire = (centroid.x, centroid.y)
+
+        return min_dist, nearest_fire
+
+    def get_fire_at_position(
+        self, point: tuple[float, float]
+    ) -> tuple[FireZone | None, float]:
+        """Get the fire zone at a specific position and distance to it.
+
+        Returns:
+            Tuple of (FireZone, distance)
+        """
+        if not self.fire_zones:
+            return None, float("inf")
+
+        p = Point(point)
+        for fire_zone in self.fire_zones:
+            if fire_zone.is_contained:
+                continue
+            dist = p.distance(fire_zone.polygon)
+            return fire_zone, dist
+        return None, float("inf")
 
     def get_danger_level(self, point: tuple[float, float]) -> float:
         danger = self.get_fire_intensity_at(point)
@@ -484,4 +574,239 @@ def load_geojson(filepath: str) -> GISMap:
         roads=roads,
         terrain_zones=terrain_zones,
         fire_zones=fire_zones,
+    )
+
+
+def create_gis_map_from_osm(
+    place_name: str | None = None,
+    north: float | None = None,
+    south: float | None = None,
+    east: float | None = None,
+    west: float | None = None,
+    distance: float = 1000,
+) -> GISMap:
+    """Create a GIS map from OpenStreetMap data.
+
+    Args:
+        place_name: Name of the place (e.g., "Attica, Greece", "Athens, Greece")
+        north/south/east/west: Bounding box coordinates (if place_name not provided)
+        distance: Distance in meters around the place center
+
+    Returns:
+        GISMap with buildings, roads, and terrain from OSM
+
+    Example:
+        >>> gis_map = create_gis_map_from_osm("Attica, Greece")
+        >>> gis_map = create_gis_map_from_osm(north=38.0, south=37.8, east=23.9, west=23.5)
+    """
+    import osmnx as ox
+
+    ox.settings.use_cache = True
+
+    if place_name:
+        gdf_buildings = ox.features_from_place(place_name, tags={"building": True})
+        gdf_roads = ox.features_from_place(place_name, tags={"highway": True})
+        gdf_natural = ox.features_from_place(place_name, tags={"natural": True})
+        gdf_landuse = ox.features_from_place(place_name, tags={"landuse": True})
+    else:
+        bbox = (north, south, east, west)
+        gdf_buildings = ox.features_from_bbox(bbox, tags={"building": True})
+        gdf_roads = ox.features_from_bbox(bbox, tags={"highway": True})
+        gdf_natural = ox.features_from_bbox(bbox, tags={"natural": True})
+        gdf_landuse = ox.features_from_bbox(bbox, tags={"landuse": True})
+
+    bounds = (
+        min(
+            gdf_buildings.geometry.bounds.minx.min(),
+            gdf_roads.geometry.bounds.minx.min(),
+        )
+        if not gdf_buildings.empty and not gdf_roads.empty
+        else 0,
+        min(
+            gdf_buildings.geometry.bounds.miny.min(),
+            gdf_roads.geometry.bounds.miny.min(),
+        )
+        if not gdf_buildings.empty and not gdf_roads.empty
+        else 0,
+        max(
+            gdf_buildings.geometry.bounds.maxx.max(),
+            gdf_roads.geometry.bounds.maxx.max(),
+        )
+        if not gdf_buildings.empty and not gdf_roads.empty
+        else 1000,
+        max(
+            gdf_buildings.geometry.bounds.maxy.max(),
+            gdf_roads.geometry.bounds.maxy.max(),
+        )
+        if not gdf_buildings.empty and not gdf_roads.empty
+        else 1000,
+    )
+
+    gis_map = GISMap(bounds=bounds)
+
+    for idx, row in gdf_buildings.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
+        try:
+            if geom.geom_type == "Polygon":
+                polygon = geom
+            elif geom.geom_type == "MultiPolygon":
+                polygon = geom.convex_hull
+            else:
+                continue
+
+            height = (
+                float(row.get("height", 10.0)) if pd.notna(row.get("height")) else 10.0
+            )
+            building_type = str(row.get("building", "generic"))
+
+            gis_map.add_building(
+                Building(
+                    building_id=f"building_{idx[0]}_{idx[1]}",
+                    polygon=polygon,
+                    height=height,
+                    floors=int(height / 3) if height > 0 else 1,
+                    building_type=building_type,
+                )
+            )
+        except Exception:
+            continue
+
+    for idx, row in gdf_roads.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
+        try:
+            if geom.geom_type == "LineString":
+                line = geom
+            elif geom.geom_type == "MultiLineString":
+                line = geom.geoms[0]
+            else:
+                continue
+
+            highway = str(row.get("highway", "residential"))
+            road_type_map = {
+                "motorway": RoadType.HIGHWAY,
+                "trunk": RoadType.HIGHWAY,
+                "primary": RoadType.PRIMARY,
+                "secondary": RoadType.SECONDARY,
+                "tertiary": RoadType.SECONDARY,
+                "residential": RoadType.RESIDENTIAL,
+                "living_street": RoadType.RESIDENTIAL,
+                "service": RoadType.RESIDENTIAL,
+                "pedestrian": RoadType.PATH,
+                "footway": RoadType.PATH,
+                "path": RoadType.PATH,
+            }
+            road_type = road_type_map.get(highway, RoadType.RESIDENTIAL)
+
+            gis_map.add_road(
+                Road(
+                    road_id=f"road_{idx[0]}_{idx[1]}",
+                    line=line,
+                    road_type=road_type,
+                    name=str(row.get("name", "")),
+                    lanes=int(row.get("lanes", 2)),
+                )
+            )
+        except Exception:
+            continue
+
+    terrain_type_map = {
+        "wood": TerrainType.FOREST,
+        "forest": TerrainType.FOREST,
+        "grassland": TerrainType.GRASS,
+        "heath": TerrainType.GRASS,
+        "scrub": TerrainType.GRASS,
+        "water": TerrainType.WATER,
+        "wetland": TerrainType.WATER,
+        "beach": TerrainType.WATER,
+        "residential": TerrainType.URBAN,
+        "commercial": TerrainType.URBAN,
+        "industrial": TerrainType.URBAN,
+        "retail": TerrainType.URBAN,
+        "farmland": TerrainType.AGRICULTURAL,
+        "farm": TerrainType.AGRICULTURAL,
+        "orchard": TerrainType.AGRICULTURAL,
+        "vineyard": TerrainType.AGRICULTURAL,
+        "park": TerrainType.PARKLAND,
+        "garden": TerrainType.PARKLAND,
+        "pitch": TerrainType.PARKLAND,
+    }
+
+    for idx, row in gdf_landuse.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
+        try:
+            if geom.geom_type == "Polygon":
+                polygon = geom
+            elif geom.geom_type == "MultiPolygon":
+                polygon = geom.convex_hull
+            else:
+                continue
+
+            landuse = str(row.get("landuse", ""))
+            terrain_type = terrain_type_map.get(landuse, TerrainType.GRASS)
+
+            gis_map.add_terrain_zone(
+                TerrainZone(
+                    zone_id=f"terrain_{idx[0]}_{idx[1]}",
+                    polygon=polygon,
+                    terrain_type=terrain_type,
+                    fuel_load=0.7 if terrain_type == TerrainType.FOREST else 0.4,
+                    moisture_content=0.3,
+                )
+            )
+        except Exception:
+            continue
+
+    for idx, row in gdf_natural.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
+        try:
+            if geom.geom_type == "Polygon":
+                polygon = geom
+            elif geom.geom_type == "MultiPolygon":
+                polygon = geom.convex_hull
+            else:
+                continue
+
+            natural = str(row.get("natural", ""))
+            terrain_type = terrain_type_map.get(natural, TerrainType.GRASS)
+
+            if terrain_type not in [t for t in gis_map.terrain_zones]:
+                gis_map.add_terrain_zone(
+                    TerrainZone(
+                        zone_id=f"natural_{idx[0]}_{idx[1]}",
+                        polygon=polygon,
+                        terrain_type=terrain_type,
+                        fuel_load=0.8 if terrain_type == TerrainType.FOREST else 0.3,
+                        moisture_content=0.4
+                        if terrain_type == TerrainType.WATER
+                        else 0.2,
+                    )
+                )
+        except Exception:
+            continue
+
+    return gis_map
+
+
+def create_wui_attica_map() -> GISMap:
+    """Create a GIS map for the Wildland-Urban Interface of Attica region, Greece.
+
+    This uses OSM data to extract buildings, roads, and vegetation for fire modeling.
+
+    Returns:
+        GISMap for Attica WUI region
+    """
+    bounds = (23.4, 37.7, 24.0, 38.3)
+    return create_gis_map_from_osm(
+        north=bounds[3],
+        south=bounds[1],
+        east=bounds[2],
+        west=bounds[0],
     )

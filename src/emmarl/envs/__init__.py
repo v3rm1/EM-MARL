@@ -1,8 +1,8 @@
 """PettingZoo environments for FireSim."""
 
-from firesim.envs.fire_env import FireEnv
-from firesim.envs.agent import AgentType
-from firesim.envs.render import (
+from emmarl.envs.fire_env import FireEnv
+from emmarl.envs.agent import AgentType
+from emmarl.envs.render import (
     FireSimRenderer,
     RenderConfig,
     RenderMode,

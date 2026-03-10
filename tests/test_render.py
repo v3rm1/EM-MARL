@@ -1,10 +1,12 @@
 """Test rendering functionality."""
 
-from firesim.envs import FireEnv, AgentType
-from firesim.envs.agent import AgentState
-from firesim.envs.render import (
+from emmarl.envs import FireEnv, AgentType
+from emmarl.envs.agent import AgentState
+from emmarl.envs.metrics import EpisodeMetrics
+from emmarl.envs.render import (
     FireSimRenderer,
     GraphFilter,
+    RenderConfig,
 )
 
 
@@ -84,7 +86,7 @@ def test_render_all_agent_types():
 
 def test_renderer_direct():
     """Test FireSimRenderer directly."""
-    from firesim.envs.map import create_default_map
+    from emmarl.envs.map import create_default_map
 
     renderer = FireSimRenderer()
 
@@ -132,4 +134,137 @@ if __name__ == "__main__":
     test_render_all_agent_types()
     test_renderer_direct()
     test_render_with_steps()
+    test_episode_metrics_initialization()
+    test_episode_metrics_record()
+    test_env_metrics_tracking()
+    test_render_with_metrics()
+    test_render_graph_with_metrics()
+    test_render_metrics_direct()
+    test_render_config_metrics_option()
     print("All rendering tests passed!")
+
+
+def test_episode_metrics_initialization():
+    """Test that EpisodeMetrics initializes correctly."""
+    metrics = EpisodeMetrics()
+    assert len(metrics.steps) == 0
+    assert len(metrics.avg_health) == 0
+    assert len(metrics.avg_stamina) == 0
+
+
+def test_episode_metrics_record():
+    """Test recording metrics."""
+    metrics = EpisodeMetrics()
+    agent_states = {
+        "medic_0": AgentState(position=(100.0, 100.0), health=80.0, stamina=60.0),
+        "firefighter_0": AgentState(
+            position=(200.0, 200.0), health=100.0, stamina=90.0
+        ),
+    }
+
+    metrics.record(
+        step=0, agent_states=agent_states, active_incidents=2, resolved_incidents=0
+    )
+
+    assert len(metrics.steps) == 1
+    assert metrics.steps[0] == 0
+    assert len(metrics.avg_health) == 1
+    assert metrics.avg_health[0] == 90.0
+    assert metrics.active_incidents[0] == 2
+    assert metrics.resolved_incidents[0] == 0
+
+
+def test_env_metrics_tracking():
+    """Test that FireEnv tracks metrics over episodes."""
+    env = FireEnv()
+    env.reset()
+
+    for _ in range(5):
+        for agent in env.agents:
+            action = env.action_space(agent).sample()
+            env.step(action)
+
+    metrics = env.get_metrics()
+    assert len(metrics.steps) > 0
+    assert len(metrics.avg_health) == len(metrics.steps)
+    assert len(metrics.avg_stamina) == len(metrics.steps)
+
+    env.close()
+
+
+def test_render_with_metrics():
+    """Test rendering with metrics."""
+    env = FireEnv()
+    env.reset()
+
+    for _ in range(10):
+        for agent in env.agents:
+            action = env.action_space(agent).sample()
+            env.step(action)
+
+    img = env.render(mode="rgb_array")
+    assert img is not None
+    assert img.shape[2] == 3
+
+    env.close()
+
+
+def test_render_graph_with_metrics():
+    """Test rendering graph mode with metrics."""
+    env = FireEnv()
+    env.reset()
+
+    for _ in range(10):
+        for agent in env.agents:
+            action = env.action_space(agent).sample()
+            env.step(action)
+
+    img = env.render(mode="graph")
+    assert img is not None
+    assert img.shape[2] == 3
+
+    env.close()
+
+
+def test_render_metrics_direct():
+    """Test rendering metrics directly via FireSimRenderer."""
+    from emmarl.envs.map import create_default_map
+
+    renderer = FireSimRenderer()
+
+    emergency_map = create_default_map()
+    agent_states = {
+        "medic_0": AgentState(position=(100.0, 100.0), health=100.0, stamina=80.0),
+    }
+    agent_types = {"medic_0": AgentType.MEDIC}
+    agent_configs = {}
+
+    metrics = EpisodeMetrics()
+    metrics.record(
+        step=0,
+        agent_states=agent_states,
+        active_incidents=1,
+        resolved_incidents=0,
+    )
+    metrics.record(
+        step=1,
+        agent_states=agent_states,
+        active_incidents=1,
+        resolved_incidents=0,
+    )
+
+    img = renderer.render(
+        emergency_map, agent_states, agent_types, agent_configs, episode_metrics=metrics
+    )
+    assert img is not None
+
+    renderer.close()
+
+
+def test_render_config_metrics_option():
+    """Test RenderConfig with metrics options."""
+    config = RenderConfig(show_metrics=False)
+    assert config.show_metrics is False
+
+    config = RenderConfig(show_metrics=True)
+    assert config.show_metrics is True

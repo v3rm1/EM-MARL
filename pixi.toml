@@ -1,22 +1,45 @@
 [workspace]
-authors = ["v3rm1_UiA <varun.ravi.varma@uia.no>"]
+authors = ["v3rm1_UiA <varun.ravi.varva@uia.no>"]
 channels = ["conda-forge"]
 name = "EM-MARL"
 platforms = ["osx-arm64"]
 version = "0.1.0"
 
 [tasks]
+test = { cmd = "pytest tests/", env = { PYTHONPATH = "src" } }
+lint = { cmd = "ruff check src/", env = { PYTHONPATH = "src" } }
+lint-fix = { cmd = "ruff check --fix src/", env = { PYTHONPATH = "src" } }
+format = { cmd = "ruff format src/", env = { PYTHONPATH = "src" } }
 
 [dependencies]
 python = "==3.12"
+osmnx = ">=2.1.0,<3"
+pandas = ">=3.0.1,<4"
 
 [pypi-dependencies]
 pettingzoo = { version = ">=1.25.0, <2", extras = ["all"] }
 torch = ">=2.10.0, <3"
+numpy = ">=2.4.2, <3"
 matplotlib = ">=3.10.8, <4"
 seaborn = ">=0.13.2, <0.14"
-numpy = ">=2.4.2, <3"
 scipy = ">=1.17.0, <2"
 scikit-learn = ">=1.8.0, <2"
 tensorboardx = ">=2.6.4, <3"
 aim = ">=3.29.1, <4"
+gymnasium = ">=1.0.0, <2"
+networkx = ">=3.4, <4"
+shapely = ">=2.0.0, <3"
+geojson = ">=3.0.0, <4"
+pytest = ">=8.0.0,<9"
+ruff = ">=0.8.0,<1"
+osmnx = "*"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"

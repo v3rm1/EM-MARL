@@ -30,17 +30,17 @@ The environment provides two rendering modes: the **Emergency Map** (grid-based)
 
 ### Default EmergencyMap
 
-![EmergencyMap Default](../images/emergency_map_default.png)
+![EmergencyMap Default](./images/emergency_map_default.png)
 
 ### GIS-Based Map
 
-![GIS Map Default](../images/gis_map_default.png)
+![GIS Map Default](./images/gis_map_default.png)
 
 ### Live Rendering with Metrics
 
 When running simulations, you can enable live rendering with real-time metrics:
 
-![EmergencyMap with Metrics](../images/emergency_map_with_metrics.png)
+![EmergencyMap with Metrics](./images/emergency_map_with_metrics.png)
 
 The metrics panel shows:
 - **Agent Status Over Time**: Number of agents in each status category (Healthy, Injured, Affected, Critical, Deceased)

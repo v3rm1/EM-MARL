@@ -38,7 +38,7 @@ Unlike traditional gridworld environments, FireSim uses a continuous coordinate 
 Each agent type has distinct:
 
 - **Action Space**: Different available actions
-- **Movement Properties**: Speed, stamina costs, terrain capabilities
+- **Movement Properties**: Speed, stamina costs, movement capabilities
 - **Resources**: Unique inventory items
 - **Objectives**: Different goals within the scenario
 

@@ -11,8 +11,7 @@ from pettingzoo import AECEnv
 from pettingzoo.utils.agent_selector import AgentSelector
 
 from emmarl.envs.agent import AgentConfig, AgentState, AgentType, AgentStatus
-from emmarl.envs.map import EmergencyMap, ZoneType, create_default_map
-from emmarl.envs.gis_map import GISMap, create_default_gis_map
+from emmarl.envs.map import ZoneType, create_default_map
 from emmarl.envs.fire_dynamics import (
     FireModel,
     create_default_fire_model,
@@ -25,7 +24,6 @@ from emmarl.envs.render import (
     GraphFilter,
 )
 from emmarl.envs.metrics import EpisodeMetrics
-from shapely.geometry import Point
 
 
 @dataclass
@@ -41,8 +39,6 @@ class FireEnvConfig:
     max_steps: int = 1000
     agent_speed: float = 10.0
     agent_vision_radius: float = 100.0
-    use_gis: bool = False
-    gis_map: GISMap | None = None
     enable_fire_dynamics: bool = True
     wind_speed: float = 10.0
     wind_direction: float = 0.0
@@ -90,17 +86,10 @@ class FireEnv(AECEnv):
         self._agent_configs: dict[str, AgentConfig] = {}
         self._agent_states: dict[str, AgentState] = {}
 
-        if self.config.use_gis:
-            self._gis_map: GISMap | None = (
-                self.config.gis_map or create_default_gis_map()
-            )
-            self._emergency_map: EmergencyMap | None = None
-        else:
-            self._emergency_map = create_default_map(
-                width=self.config.map_width,
-                height=self.config.map_height,
-            )
-            self._gis_map = None
+        self._emergency_map = create_default_map(
+            width=self.config.map_width,
+            height=self.config.map_height,
+        )
 
         self._current_step = 0
         self._agent_selector: AgentSelector | None = None
@@ -109,12 +98,7 @@ class FireEnv(AECEnv):
         self._action_spaces = self._create_action_spaces()
         self._observation_spaces = self._create_observation_spaces()
 
-        if self._emergency_map:
-            self._total_incidents = len(self._emergency_map.incidents)
-        else:
-            self._total_incidents = (
-                len(self._gis_map.fire_zones) if self._gis_map else 0
-            )
+        self._total_incidents = len(self._emergency_map.incidents)
         self._resolved_incidents = 0
 
         self._renderer: FireSimRenderer | None = None
@@ -219,14 +203,10 @@ class FireEnv(AECEnv):
 
         self._episode_metrics = EpisodeMetrics()
 
-        if self.config.use_gis:
-            if self._gis_map is None:
-                self._gis_map = create_default_gis_map()
-        else:
-            self._emergency_map = create_default_map(
-                width=self.config.map_width,
-                height=self.config.map_height,
-            )
+        self._emergency_map = create_default_map(
+            width=self.config.map_width,
+            height=self.config.map_height,
+        )
         self._resolved_incidents = 0
         self._total_incidents = self._get_total_incidents()
 
@@ -242,9 +222,7 @@ class FireEnv(AECEnv):
 
     def _get_total_incidents(self) -> int:
         """Get total number of incidents based on map type."""
-        if self.config.use_gis and self._gis_map:
-            return len(self._gis_map.fire_zones)
-        elif self._emergency_map:
+        if self._emergency_map:
             return len(self._emergency_map.incidents)
         return 0
 
@@ -253,21 +231,10 @@ class FireEnv(AECEnv):
         if not self.config.enable_fire_dynamics:
             return
 
-        if self.config.use_gis and self._gis_map:
-            ignition_points = []
-            for fz in self._gis_map.fire_zones:
-                centroid = fz.polygon.centroid
-                ignition_points.append((centroid.x, centroid.y))
-            self._fire_model = create_default_fire_model(
-                ignition_points=ignition_points if ignition_points else None,
-                wind_speed=self.config.wind_speed,
-                wind_direction=self.config.wind_direction,
-            )
-        else:
-            self._fire_model = create_default_fire_model(
-                wind_speed=self.config.wind_speed,
-                wind_direction=self.config.wind_direction,
-            )
+        self._fire_model = create_default_fire_model(
+            wind_speed=self.config.wind_speed,
+            wind_direction=self.config.wind_direction,
+        )
 
     def _update_fire_dynamics(self) -> None:
         """Update fire dynamics if enabled."""
@@ -275,14 +242,6 @@ class FireEnv(AECEnv):
             return
 
         fuel_map: dict[tuple[float, float], FuelProperties] = {}
-
-        if self.config.use_gis and self._gis_map:
-            for tz in self._gis_map.terrain_zones:
-                centroid = tz.polygon.centroid
-                key = (int(centroid.x), int(centroid.y))
-                fuel_map[key] = FuelProperties.from_terrain(
-                    tz.terrain_type.name, tz.fuel_load, tz.moisture_content
-                )
 
         self._fire_model.update(fuel_map)
 
@@ -358,9 +317,6 @@ class FireEnv(AECEnv):
         if self._fire_model:
             return self._fire_model.get_fire_distance(position)
 
-        if self.config.use_gis and self._gis_map:
-            return self._gis_map.distance_to_fire(position)
-
         return float("inf"), None
 
     def get_agent_status_counts(self) -> dict[AgentStatus, int]:
@@ -426,18 +382,14 @@ class FireEnv(AECEnv):
 
     def _is_within_bounds(self, point: tuple[float, float]) -> bool:
         """Check if point is within map bounds."""
-        if self.config.use_gis and self._gis_map:
-            return self._gis_map.is_within_bounds(point)
-        elif self._emergency_map:
+        if self._emergency_map:
             return self._emergency_map.is_within_bounds(point)
         x, y = point
         return 0 <= x <= self.config.map_width and 0 <= y <= self.config.map_height
 
     def _get_danger_level(self, point: tuple[float, float]) -> float:
         """Get danger level at a point."""
-        if self.config.use_gis and self._gis_map:
-            return self._gis_map.get_danger_level(point)
-        elif self._emergency_map:
+        if self._emergency_map:
             return self._emergency_map.get_danger_level(point)
         return 0.0
 
@@ -445,21 +397,7 @@ class FireEnv(AECEnv):
         self, position: tuple[float, float]
     ) -> tuple[Any | None, float]:
         """Get nearest active incident to a position."""
-        if self.config.use_gis and self._gis_map:
-            min_dist = float("inf")
-            nearest = None
-            for fire_zone in self._gis_map.fire_zones:
-                if fire_zone.is_contained:
-                    continue
-                centroid = fire_zone.polygon.centroid
-                dist = np.sqrt(
-                    (centroid.x - position[0]) ** 2 + (centroid.y - position[1]) ** 2
-                )
-                if dist < min_dist:
-                    min_dist = dist
-                    nearest = fire_zone
-            return nearest, min_dist
-        elif self._emergency_map:
+        if self._emergency_map:
             return self._emergency_map.get_nearest_active_incident(position)
         return None, float("inf")
 
@@ -479,29 +417,6 @@ class FireEnv(AECEnv):
         Returns:
             True if fire was reduced
         """
-        if self.config.use_gis and self._gis_map:
-            from shapely.geometry import Point
-
-            p = Point(position)
-            for fire_zone in self._gis_map.fire_zones:
-                if fire_zone.is_contained:
-                    continue
-
-                dist = fire_zone.polygon.distance(p)
-
-                if dist <= effective_range:
-                    effectiveness = 1.0 - (dist / effective_range)
-                    actual_amount = amount * effectiveness
-
-                    fire_zone.fire_intensity = max(
-                        0.0, fire_zone.fire_intensity - actual_amount
-                    )
-
-                    if fire_zone.fire_intensity <= 0:
-                        fire_zone.is_contained = True
-                        self._resolved_incidents += 1
-                    return True
-            return False
         return False
 
     def _initialize_agents(self) -> None:
@@ -527,9 +442,6 @@ class FireEnv(AECEnv):
         margin = 50.0
         max_width = self.config.map_width
         max_height = self.config.map_height
-        if self.config.use_gis and self._gis_map:
-            max_width = self._gis_map.width
-            max_height = self._gis_map.height
         while True:
             x = np.random.uniform(margin, max_width - margin)
             y = np.random.uniform(margin, max_height - margin)
@@ -570,11 +482,7 @@ class FireEnv(AECEnv):
         """Record current metrics for visualization."""
         active_incidents = 0
 
-        if self.config.use_gis and self._gis_map:
-            active_incidents = sum(
-                1 for fz in self._gis_map.fire_zones if not fz.is_contained
-            )
-        elif self._emergency_map:
+        if self._emergency_map:
             active_incidents = sum(
                 1 for inc in self._emergency_map.incidents if inc.active
             )
@@ -656,13 +564,6 @@ class FireEnv(AECEnv):
 
         if self._is_within_bounds((new_x, new_y)):
             can_move = True
-
-            if self.config.use_gis and self._gis_map and self._gis_map.roads:
-                agent_type = self._get_agent_type(agent)
-                if agent_type != AgentType.CIVILIAN:
-                    on_road = self._gis_map.is_on_road((new_x, new_y), buffer=15.0)
-                    if not on_road:
-                        can_move = False
 
             if can_move:
                 danger = self._get_danger_level((new_x, new_y))
@@ -759,26 +660,17 @@ class FireEnv(AECEnv):
 
         FIREFIGHTER_RANGE = 50.0
 
-        if self.config.use_gis and self._gis_map:
-            reduced = self._reduce_fire_intensity(
-                state.position, 0.2, FIREFIGHTER_RANGE
-            )
-            if reduced:
-                config.consume_resource("water", 10)
-        else:
-            incident, dist = self._emergency_map.get_nearest_active_incident(
-                state.position
-            )
-            if (
-                incident
-                and dist < FIREFIGHTER_RANGE
-                and incident.incident_type == ZoneType.FIRE
-            ):
-                if config.consume_resource("water", 10):
-                    effectiveness = 1.0 - (dist / FIREFIGHTER_RANGE)
-                    incident.reduce_severity(0.2 * effectiveness)
-                    if incident.is_resolved():
-                        self._resolved_incidents += 1
+        incident, dist = self._emergency_map.get_nearest_active_incident(state.position)
+        if (
+            incident
+            and dist < FIREFIGHTER_RANGE
+            and incident.incident_type == ZoneType.FIRE
+        ):
+            if config.consume_resource("water", 10):
+                effectiveness = 1.0 - (dist / FIREFIGHTER_RANGE)
+                incident.reduce_severity(0.2 * effectiveness)
+                if incident.is_resolved():
+                    self._resolved_incidents += 1
 
     def _firefighter_use_foam(self, agent: str, state: AgentState) -> None:
         """Firefighter uses foam on hazardous incidents.
@@ -791,28 +683,21 @@ class FireEnv(AECEnv):
 
         FOAM_RANGE = 40.0
 
-        if self.config.use_gis and self._gis_map:
-            reduced = self._reduce_fire_intensity(state.position, 0.3, FOAM_RANGE)
-            if reduced:
-                config.consume_resource("foam", 5)
-        else:
-            incident, dist = self._emergency_map.get_nearest_active_incident(
-                state.position
+        incident, dist = self._emergency_map.get_nearest_active_incident(state.position)
+        if (
+            incident
+            and dist < FOAM_RANGE
+            and incident.incident_type
+            in (
+                ZoneType.FIRE,
+                ZoneType.HAZMAT,
             )
-            if (
-                incident
-                and dist < FOAM_RANGE
-                and incident.incident_type
-                in (
-                    ZoneType.FIRE,
-                    ZoneType.HAZMAT,
-                )
-            ):
-                if config.consume_resource("foam", 5):
-                    effectiveness = 1.0 - (dist / FOAM_RANGE)
-                    incident.reduce_severity(0.3 * effectiveness)
-                    if incident.is_resolved():
-                        self._resolved_incidents += 1
+        ):
+            if config.consume_resource("foam", 5):
+                effectiveness = 1.0 - (dist / FOAM_RANGE)
+                incident.reduce_severity(0.3 * effectiveness)
+                if incident.is_resolved():
+                    self._resolved_incidents += 1
 
     def _police_control_crowd(self, agent: str, state: AgentState) -> None:
         """Police controls crowded areas.
@@ -821,35 +706,16 @@ class FireEnv(AECEnv):
         """
         POLICE_RANGE = 60.0
 
-        if self.config.use_gis and self._gis_map:
-            if not self._gis_map.fire_zones:
-                return
-
-            p = Point(state.position)
-            for fire_zone in self._gis_map.fire_zones:
-                dist = p.distance(fire_zone.polygon)
-                if dist < POLICE_RANGE:
-                    effectiveness = 1.0 - (dist / POLICE_RANGE)
-                    fire_zone.fire_intensity = max(
-                        0.0, fire_zone.fire_intensity - 0.1 * effectiveness
-                    )
-                    if fire_zone.fire_intensity <= 0:
-                        fire_zone.is_contained = True
-                        self._resolved_incidents += 1
-                    return
-        else:
-            incident, dist = self._emergency_map.get_nearest_active_incident(
-                state.position
-            )
-            if (
-                incident
-                and dist < POLICE_RANGE
-                and incident.incident_type == ZoneType.CROWDED
-            ):
-                effectiveness = 1.0 - (dist / POLICE_RANGE)
-                incident.reduce_severity(0.15 * effectiveness)
-                if incident.is_resolved():
-                    self._resolved_incidents += 1
+        incident, dist = self._emergency_map.get_nearest_active_incident(state.position)
+        if (
+            incident
+            and dist < POLICE_RANGE
+            and incident.incident_type == ZoneType.CROWDED
+        ):
+            effectiveness = 1.0 - (dist / POLICE_RANGE)
+            incident.reduce_severity(0.15 * effectiveness)
+            if incident.is_resolved():
+                self._resolved_incidents += 1
 
     def _police_place_barrier(self, agent: str, state: AgentState) -> None:
         """Police places barriers to control area."""
@@ -959,33 +825,18 @@ class FireEnv(AECEnv):
                     agent_type = self._get_agent_type(other_agent)
                     obs[oy, ox, agent_type.value - 1] = 1.0
 
-        if self.config.use_gis and self._gis_map:
-            for fire_zone in self._gis_map.fire_zones:
-                if fire_zone.is_contained:
-                    continue
-                centroid = fire_zone.polygon.centroid
-                dx = centroid.x - state.position[0]
-                dy = centroid.y - state.position[1]
-                dist = np.sqrt(dx**2 + dy**2)
+        for incident in self._emergency_map.incidents:
+            if not incident.active:
+                continue
+            dx = incident.position[0] - state.position[0]
+            dy = incident.position[1] - state.position[1]
+            dist = np.sqrt(dx**2 + dy**2)
 
-                if dist < self.config.agent_vision_radius:
-                    ox = int(dx + vision_radius)
-                    oy = int(dy + vision_radius)
-                    if 0 <= ox < obs_size and 0 <= oy < obs_size:
-                        obs[oy, ox, 3] = fire_zone.fire_intensity
-        else:
-            for incident in self._emergency_map.incidents:
-                if not incident.active:
-                    continue
-                dx = incident.position[0] - state.position[0]
-                dy = incident.position[1] - state.position[1]
-                dist = np.sqrt(dx**2 + dy**2)
-
-                if dist < self.config.agent_vision_radius:
-                    ox = int(dx + vision_radius)
-                    oy = int(dy + vision_radius)
-                    if 0 <= ox < obs_size and 0 <= oy < obs_size:
-                        obs[oy, ox, 3] = incident.severity
+            if dist < self.config.agent_vision_radius:
+                ox = int(dx + vision_radius)
+                oy = int(dy + vision_radius)
+                if 0 <= ox < obs_size and 0 <= oy < obs_size:
+                    obs[oy, ox, 3] = incident.severity
 
         return obs
 
@@ -1029,10 +880,8 @@ class FireEnv(AECEnv):
 
         agent_types = {agent: self._get_agent_type(agent) for agent in self.agents}
 
-        render_map = self._gis_map if self._gis_map else self._emergency_map
-
         return self._renderer.render(
-            emergency_map=render_map,
+            emergency_map=self._emergency_map,
             agent_states=self._agent_states,
             agent_types=agent_types,
             agent_configs=self._agent_configs,

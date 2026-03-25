@@ -13,7 +13,6 @@ import networkx as nx
 
 from emmarl.envs.agent import AgentState, AgentType
 from emmarl.envs.map import EmergencyMap, ZoneType
-from emmarl.envs.gis_map import GISMap, TerrainType, RoadType
 from emmarl.envs.metrics import EpisodeMetrics
 
 
@@ -90,32 +89,9 @@ class FireSimRenderer:
             ZoneType.BUILDING: "#95a5a6",
         }
 
-        self._terrain_colors = {
-            TerrainType.WATER: "#3498db",
-            TerrainType.FOREST: "#228b22",
-            TerrainType.GRASS: "#7cfc00",
-            TerrainType.URBAN: "#808080",
-            TerrainType.ROAD: "#2c3e50",
-            TerrainType.BUILDING: "#696969",
-            TerrainType.PARKLAND: "#90ee90",
-            TerrainType.AGRICULTURAL: "#f4a460",
-            TerrainType.BURNED: "#4a3728",
-        }
-
-        self._fire_intensity_colors = [
-            "#ffffcc",
-            "#ffeda0",
-            "#fed976",
-            "#feb24c",
-            "#fd8d3c",
-            "#fc4e2a",
-            "#e31a1c",
-            "#b10026",
-        ]
-
     def render(
         self,
-        emergency_map: EmergencyMap | GISMap,
+        emergency_map: EmergencyMap,
         agent_states: dict[str, AgentState],
         agent_types: dict[str, AgentType],
         agent_configs: dict[str, Any],
@@ -127,7 +103,7 @@ class FireSimRenderer:
         """Render the environment.
 
         Args:
-            emergency_map: The map to render (EmergencyMap or GISMap)
+            emergency_map: The map to render
             agent_states: Dict of agent states
             agent_types: Dict of agent types
             agent_configs: Dict of agent configs
@@ -138,7 +114,6 @@ class FireSimRenderer:
         Returns:
             Rendered image as numpy array
         """
-        is_gis = isinstance(emergency_map, GISMap)
         has_metrics_data = (
             episode_metrics is not None and len(episode_metrics.steps) > 0
         )
@@ -211,28 +186,17 @@ class FireSimRenderer:
                 if show_metrics and self._ax_metrics1 is not None:
                     self._ax_metrics1.cla()
 
-        if mode == RenderMode.BOTH:
-            if is_gis:
-                self._render_gis_map(emergency_map, agent_states, agent_types)
-            else:
-                self._render_map(emergency_map, agent_states, agent_types)
+        if mode == RenderMode.BOTH or mode == RenderMode.MAP:
+            self._render_map(emergency_map, agent_states, agent_types)
+        if mode == RenderMode.BOTH or mode == RenderMode.GRAPH:
             self._render_graph(
                 emergency_map, agent_states, agent_types, agent_configs, graph_filter
             )
-            if show_metrics:
-                self._render_metrics(episode_metrics)
+        if show_metrics:
+            self._render_metrics(episode_metrics)
+
+        if mode == RenderMode.BOTH or mode == RenderMode.MAP:
             plt.tight_layout()
-        elif mode == RenderMode.MAP:
-            if is_gis:
-                self._render_gis_map(emergency_map, agent_states, agent_types)
-            else:
-                self._render_map(emergency_map, agent_states, agent_types)
-        elif mode == RenderMode.GRAPH:
-            self._render_graph(
-                emergency_map, agent_states, agent_types, agent_configs, graph_filter
-            )
-            if show_metrics:
-                self._render_metrics(episode_metrics)
 
         if interactive:
             self._fig.canvas.draw()
@@ -397,129 +361,6 @@ class FireSimRenderer:
                     arrowprops=dict(arrowstyle="->", color=color, lw=1),
                     zorder=9,
                 )
-
-    def _render_gis_map(
-        self,
-        gis_map: GISMap,
-        agent_states: dict[str, AgentState],
-        agent_types: dict[str, AgentType],
-    ) -> None:
-        """Render the GIS map view with terrain, buildings, roads."""
-        self._ax_map.set_xlim(gis_map.bounds[0], gis_map.bounds[2])
-        self._ax_map.set_ylim(gis_map.bounds[1], gis_map.bounds[3])
-        self._ax_map.set_aspect("equal")
-        self._ax_map.set_title("FireSim - GIS Map")
-        self._ax_map.set_xlabel("Easting (m)")
-        self._ax_map.set_ylabel("Northing (m)")
-
-        if self.config.show_grid:
-            self._ax_map.grid(True, alpha=0.3)
-
-        self._render_gis_terrain(gis_map)
-        self._render_gis_roads(gis_map)
-        self._render_gis_buildings(gis_map)
-        self._render_gis_fires(gis_map)
-        self._render_agents(agent_states, agent_types)
-
-        if self.config.show_legend:
-            self._add_gis_legend()
-
-    def _render_gis_terrain(self, gis_map: GISMap) -> None:
-        """Render terrain zones on the GIS map."""
-        for zone in gis_map.terrain_zones:
-            color = self._terrain_colors.get(zone.terrain_type, "#95a5a6")
-            x, y = zone.polygon.exterior.xy
-            self._ax_map.fill(x, y, facecolor=color, alpha=0.4, edgecolor="none")
-
-    def _render_gis_roads(self, gis_map: GISMap) -> None:
-        """Render roads on the GIS map."""
-        road_colors = {
-            RoadType.HIGHWAY: "#e74c3c",
-            RoadType.PRIMARY: "#f39c12",
-            RoadType.SECONDARY: "#f1c40f",
-            RoadType.RESIDENTIAL: "#bdc3c7",
-            RoadType.PATH: "#95a5a6",
-        }
-        for road in gis_map.roads:
-            color = road_colors.get(road.road_type, "#bdc3c7")
-            x, y = road.line.xy
-            self._ax_map.plot(x, y, color=color, linewidth=road.lanes * 2, alpha=0.8)
-            if road.name:
-                mid_idx = len(x) // 2
-                self._ax_map.text(
-                    x[mid_idx], y[mid_idx], road.name, fontsize=6, alpha=0.7
-                )
-
-    def _render_gis_buildings(self, gis_map: GISMap) -> None:
-        """Render buildings on the GIS map."""
-        for building in gis_map.buildings:
-            x, y = building.polygon.exterior.xy
-            color = "#505050" if building.height < 10 else "#303030"
-            self._ax_map.fill(
-                x, y, facecolor=color, alpha=0.7, edgecolor="black", linewidth=1
-            )
-            centroid = building.polygon.centroid
-            self._ax_map.text(
-                centroid.x,
-                centroid.y,
-                f"{building.building_id}\n{building.height:.0f}m",
-                fontsize=5,
-                ha="center",
-                va="center",
-                color="white",
-            )
-
-    def _render_gis_fires(self, gis_map: GISMap) -> None:
-        """Render fire zones on the GIS map."""
-        for fire in gis_map.fire_zones:
-            if fire.fire_intensity <= 0:
-                continue
-            color_idx = min(
-                int(fire.fire_intensity * len(self._fire_intensity_colors)),
-                len(self._fire_intensity_colors) - 1,
-            )
-            color = self._fire_intensity_colors[color_idx]
-            x, y = fire.polygon.exterior.xy
-            self._ax_map.fill(
-                x, y, facecolor=color, alpha=0.6, edgecolor="red", linewidth=2
-            )
-            centroid = fire.polygon.centroid
-            self._ax_map.text(
-                centroid.x,
-                centroid.y,
-                f"FIRE\n{fire.fire_intensity:.0%}",
-                fontsize=8,
-                ha="center",
-                va="center",
-                fontweight="bold",
-                color="darkred",
-            )
-
-    def _add_gis_legend(self) -> None:
-        """Add legend for GIS map elements."""
-        legend_elements = []
-
-        for terrain_type, color in self._terrain_colors.items():
-            legend_elements.append(
-                patches.Patch(
-                    facecolor=color,
-                    edgecolor="black",
-                    alpha=0.4,
-                    label=terrain_type.name,
-                )
-            )
-
-        legend_elements.append(
-            patches.Patch(
-                facecolor="#505050", edgecolor="black", alpha=0.7, label="Building"
-            )
-        )
-
-        self._ax_map.legend(
-            handles=legend_elements,
-            loc="upper right",
-            fontsize=7,
-        )
 
     def _add_map_legend(self) -> None:
         """Add legend for map elements."""

@@ -11,8 +11,9 @@ EM-MARL simulates emergency response scenarios where multiple agent types (medic
 - **Multi-Agent RL**: PettingZoo-based AEC environment for multi-agent learning
 - **4 Agent Types**: Medic, FireForce, Police, Civilian - each with unique actions
 - **Map-Based Layout**: Continuous coordinate system with zones and incidents
-- **Movement Physics**: Velocity-based movement with stamina, running, and terrain handling
+- **Movement Physics**: Velocity-based movement with stamina and running
 - **Resource Management**: Agents have limited resources (medkits, water, barriers, etc.)
+- **Fire Dynamics**: Rothermel-based fire propagation model
 
 ## Quick Start
 

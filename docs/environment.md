@@ -26,15 +26,11 @@ env.close()
 
 ## Visualization
 
-The environment provides two rendering modes: the **Emergency Map** (grid-based) and **GIS Map** (geographic information system with terrain, roads, and buildings).
+The environment provides rendering for the Emergency Map with agent relationships and real-time metrics.
 
-### Default EmergencyMap
+### EmergencyMap
 
 ![EmergencyMap Default](./images/emergency_map_default.png)
-
-### GIS-Based Map
-
-![GIS Map Default](./images/gis_map_default.png)
 
 ### Live Rendering with Metrics
 
@@ -66,12 +62,6 @@ for _ in range(1000):
     plt.pause(0.01)
 
 env.close()
-```
-
-Use `--gis` flag with `random_agents.py` to use the GIS map:
-
-```bash
-python random_agents.py --gis
 ```
 
 ## Configuration
@@ -116,8 +106,9 @@ env = FireEnv(config)
 | `max_steps` | int | 1000 | Maximum episode length |
 | `agent_speed` | float | 10.0 | Base agent movement speed |
 | `agent_vision_radius` | float | 100.0 | Agent observation radius |
-| `use_gis` | bool | False | Use GIS-based map system |
-| `gis_map` | GISMap | None | Custom GIS map (when use_gis=True) |
+| `enable_fire_dynamics` | bool | True | Enable fire propagation |
+| `wind_speed` | float | 10.0 | Wind speed for fire model |
+| `wind_direction` | float | 0.0 | Wind direction (radians) |
 | `reward_weights` | dict | {...} | Reward function weights |
 
 ## Agent Types
@@ -171,6 +162,8 @@ The reward function considers:
 - **incident_resolved**: Points for resolving incidents
 - **casualty_prevented**: Points for saving lives
 - **damage_reduced**: Points for reducing incident severity
+- **survived**: Points for surviving
+- **died**: Penalty for death
 - **stamina_penalty**: Penalty for stamina depletion
 - **time_penalty**: Small penalty per step
 
@@ -180,6 +173,17 @@ An episode ends when:
 1. All incidents are resolved
 2. All agents are dead
 3. Maximum steps reached (truncation)
+
+## Fire Dynamics
+
+FireEnv includes a fire dynamics model based on the Rothermel model for realistic fire propagation:
+
+- Fire spreads based on wind speed and direction
+- Terrain affects fuel properties
+- Fire intensity and flame length calculated per position
+- Agents take damage from fire, smoke, and heat
+
+Enable/disable with `enable_fire_dynamics` config option.
 
 ## PettingZoo API
 

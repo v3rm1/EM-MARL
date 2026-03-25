@@ -20,7 +20,7 @@ FireSim is an emergency response multi-agent reinforcement learning simulator bu
 - **Diverse Agent Types**: Medics, Fire Force, Police, and Civilians with unique capabilities
 - **Map-Based Simulation**: Continuous coordinate system with zones and dynamic incidents
 - **Resource Management**: Limited resources that agents must manage strategically
-- **Realistic Movement**: Physics-based movement with stamina, running, and terrain considerations
+- **Realistic Movement**: Physics-based movement with stamina and running
 - **PettingZoo Compatible**: Full AEC environment API for RL training
 
 ### Use Cases

@@ -12,7 +12,7 @@ import matplotlib.patches as patches
 import networkx as nx
 
 from emmarl.envs.agent import AgentState, AgentType
-from emmarl.envs.map import EmergencyMap, ZoneType
+from emmarl.envs.map import EmergencyMap, TerrainType, ZoneType
 from emmarl.envs.metrics import EpisodeMetrics
 
 
@@ -87,6 +87,17 @@ class FireSimRenderer:
             ZoneType.MEDICAL_EMERGENCY: "#1abc9c",
             ZoneType.ROAD: "#34495e",
             ZoneType.BUILDING: "#95a5a6",
+        }
+
+        self._terrain_colors = {
+            TerrainType.OPEN: "#90ee90",
+            TerrainType.FOREST: "#228b22",
+            TerrainType.GRASS: "#7cfc00",
+            TerrainType.URBAN: "#808080",
+            TerrainType.ROAD: "#2c3e50",
+            TerrainType.WATER: "#3498db",
+            TerrainType.BUILDING: "#696969",
+            TerrainType.BURNED: "#4a3728",
         }
 
     def render(
@@ -231,19 +242,47 @@ class FireSimRenderer:
         self._ax_map.set_xlim(0, emergency_map.width)
         self._ax_map.set_ylim(0, emergency_map.height)
         self._ax_map.set_aspect("equal")
-        self._ax_map.set_title("FireSim - Emergency Map")
+        self._ax_map.set_title("FireSim - Emergency Map (Grid-Based)")
         self._ax_map.set_xlabel("X Position")
         self._ax_map.set_ylabel("Y Position")
 
         if self.config.show_grid:
             self._ax_map.grid(True, alpha=0.3)
 
+        self._render_terrain(emergency_map)
         self._render_zones(emergency_map)
         self._render_incidents(emergency_map)
         self._render_agents(agent_states, agent_types)
 
         if self.config.show_legend:
             self._add_map_legend()
+
+    def _render_terrain(self, emergency_map: EmergencyMap) -> None:
+        """Render grid terrain."""
+        if emergency_map.terrain is None:
+            return
+
+        terrain = emergency_map.terrain
+        cell_size = terrain.cell_size
+
+        for gy in range(terrain.height):
+            for gx in range(terrain.width):
+                terrain_type = TerrainType(terrain.terrain[gy, gx])
+                color = self._terrain_colors.get(terrain_type, "#90ee90")
+
+                x = gx * cell_size
+                y = gy * cell_size
+
+                rect = patches.Rectangle(
+                    (x, y),
+                    cell_size,
+                    cell_size,
+                    linewidth=0.5,
+                    edgecolor="#333333",
+                    facecolor=color,
+                    alpha=0.6,
+                )
+                self._ax_map.add_patch(rect)
 
     def _render_zones(self, emergency_map: EmergencyMap) -> None:
         """Render zones on the map."""

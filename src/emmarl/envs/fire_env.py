@@ -243,6 +243,18 @@ class FireEnv(AECEnv):
 
         fuel_map: dict[tuple[float, float], FuelProperties] = {}
 
+        if self._emergency_map.terrain:
+            grid = self._emergency_map.terrain
+            for gy in range(grid.height):
+                for gx in range(grid.width):
+                    world_x, world_y = grid.to_world_coords(gx, gy)
+                    fuel_load = grid.get_fuel_load(world_x, world_y)
+                    if fuel_load > 0:
+                        key = (int(world_x), int(world_y))
+                        fuel_map[key] = FuelProperties.from_terrain(
+                            "grass", fuel_load, 0.3
+                        )
+
         self._fire_model.update(fuel_map)
 
     def _apply_fire_damage_to_agents(self) -> None:
@@ -530,7 +542,10 @@ class FireEnv(AECEnv):
             run_input == 1 and move_config.can_run and not state.is_exhausted()
         )
 
-        speed_multiplier = move_config.run_multiplier if state.is_running else 1.0
+        terrain_multiplier = self._emergency_map.get_speed_multiplier(state.position)
+        speed_multiplier = (
+            move_config.run_multiplier if state.is_running else 1.0
+        ) * terrain_multiplier
         effective_max_speed = move_config.max_speed * speed_multiplier
 
         desired_vx = move_input[0] * effective_max_speed
@@ -564,6 +579,9 @@ class FireEnv(AECEnv):
 
         if self._is_within_bounds((new_x, new_y)):
             can_move = True
+
+            if not self._emergency_map.is_passable((new_x, new_y)):
+                can_move = False
 
             if can_move:
                 danger = self._get_danger_level((new_x, new_y))

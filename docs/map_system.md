@@ -1,11 +1,11 @@
 # Map System
 
-FireSim uses the **EmergencyMap** system for managing the simulation space.
+FireSim uses a **grid-based EmergencyMap** system with terrain for managing the simulation space.
 
 ## Coordinate System
 
 - **Origin**: (0, 0) at bottom-left
-- **Units**: Arbitrary (default map is 1000x1000 units)
+- **Grid**: Continuous space divided into cells (default cell_size=10.0)
 - **Agents**: Position defined as (x, y) tuple
 
 ```python
@@ -15,9 +15,9 @@ FireSim uses the **EmergencyMap** system for managing the simulation space.
 (1000, 1000) # Top-right corner
 ```
 
-## EmergencyMap
+## Grid-Based Terrain
 
-The `EmergencyMap` class manages the simulation space:
+The map is divided into a grid of cells, each with a terrain type:
 
 ```python
 from emmarl.envs.map import EmergencyMap
@@ -25,10 +25,105 @@ from emmarl.envs.map import EmergencyMap
 emergency_map = EmergencyMap(
     width=1000.0,
     height=1000.0,
-    zones=[],
-    incidents=[],
-    obstacles=[],
+    cell_size=10.0,  # Creates 100x100 grid
 )
+```
+
+## Terrain Types
+
+```python
+from emmarl.envs.map import TerrainType
+
+OPEN          # Open ground (default)
+FOREST        # Forest, high fuel, slow movement (0.6x)
+GRASS         # Grassland, medium fuel (0.8x)
+URBAN         # Urban area (0.9x)
+ROAD          # Roads, fast movement (1.2x), no fuel
+WATER         # Water, impassable (0.0x)
+BUILDING      # Building footprint (0.5x)
+BURNED        # Burned area (0.7x)
+```
+
+### Terrain Properties
+
+Each terrain type affects movement speed and fire behavior:
+
+| Terrain   | Speed Multiplier | Fuel Load | Fire Resistance |
+|-----------|-----------------|-----------|-----------------|
+| OPEN      | 1.0             | 0.1       | 0.9             |
+| FOREST    | 0.6             | 0.9       | 0.1             |
+| GRASS     | 0.8             | 0.6       | 0.3             |
+| URBAN     | 0.9             | 0.4       | 0.5             |
+| ROAD      | 1.2             | 0.0       | 1.0             |
+| WATER     | 0.0 (impassable)| 0.0       | 1.0             |
+| BUILDING  | 0.5             | 0.5       | 0.6             |
+| BURNED    | 0.7             | 0.0       | 1.0             |
+
+### Querying Terrain
+
+```python
+# Get terrain at position
+terrain = emergency_map.get_terrain_at((300.0, 300.0))
+
+# Get speed multiplier (affects agent movement)
+speed_mult = emergency_map.get_speed_multiplier((300.0, 300.0))
+
+# Get fuel load (affects fire spread)
+fuel = emergency_map.get_fuel_load((300.0, 300.0))
+
+# Check if position is passable
+can_pass = emergency_map.is_passable((300.0, 300.0))
+```
+
+## GridTerrain Class
+
+For direct grid manipulation:
+
+```python
+from emmarl.envs.map import GridTerrain, TerrainType
+
+grid = GridTerrain(width=100, height=100, cell_size=10.0)
+
+# Set terrain at world position
+grid.set_terrain_at(300.0, 300.0, TerrainType.FOREST)
+
+# Set terrain at grid coordinates
+grid.set_terrain_at_grid(30, 30, TerrainType.BUILDING)
+
+# Fill rectangular region
+grid.fill_rectangle(100, 100, 300, 300, TerrainType.GRASS)
+
+# Convert between coordinates
+grid_x, grid_y = grid.to_grid_coords(350.0, 250.0)
+world_x, world_y = grid.to_world_coords(35, 25)
+```
+
+## Wildland-Urban Interface (WUI)
+
+FireSim includes procedural WUI terrain generation:
+
+```python
+from emmarl.envs.map import EmergencyMap
+
+emergency_map = EmergencyMap(width=1000.0, height=1000.0)
+emergency_map.generate_wui_terrain(seed=42)
+emergency_map.generate_road_grid()
+```
+
+This creates:
+- **Urban core**: Dense buildings and roads in the center
+- **WUI zone**: Mix of buildings, vegetation around urban area
+- **Wildland**: Forest and grass in outer areas
+- **Roads**: Grid pattern connecting all areas
+
+## Procedural Road Generation
+
+```python
+# Generate road between two points
+emergency_map.generate_road(x1, y1, x2, y2, width=20.0)
+
+# Generate road grid across the map
+emergency_map.generate_road_grid(seed=None)
 ```
 
 ## Zones
@@ -62,28 +157,12 @@ fire_zone = Zone(
     position=(300.0, 300.0),  # Center
     size=(100.0, 100.0),      # Width, height
     intensity=0.8,            # 0-1 severity
-    properties={},            # Custom properties
 )
-```
-
-### Zone Properties
-
-```python
-# Check if point is in zone
-fire_zone.contains_point((300.0, 300.0))  # True
-
-# Get bounding box
-fire_zone.bounds  # ((250, 250), (350, 350))
-
-# Distance to zone center
-fire_zone.distance_to((400.0, 400.0))  # ~141.4
 ```
 
 ## Incidents
 
 Incidents are dynamic events that agents must resolve:
-
-### Creating Incidents
 
 ```python
 from emmarl.envs.map import Incident, ZoneType
@@ -94,33 +173,15 @@ fire_incident = Incident(
     position=(300.0, 300.0),
     severity=0.8,
     active=True,
-    casualties=0,
     resources_required={"water": 50.0, "foam": 20.0},
 )
-```
 
-### Incident Properties
-
-```python
 # Check if resolved
 fire_incident.is_resolved()  # False
 
 # Reduce severity
-fire_incident.reduce_severity(0.3)  # severity now 0.5
+fire_incident.reduce_severity(0.3)
 fire_incident.is_resolved()  # True if severity <= 0
-```
-
-### Managing Incidents
-
-```python
-# Add incident to map
-emergency_map.add_incident(fire_incident)
-
-# Get incident at location
-incident = emergency_map.get_incident_at((300.0, 300.0), radius=10)
-
-# Get nearest active incident
-nearest, distance = emergency_map.get_nearest_active_incident((0.0, 0.0))
 ```
 
 ## Danger Level
@@ -135,43 +196,34 @@ danger = emergency_map.get_danger_level((300.0, 300.0))
 # - Distance from hazards
 ```
 
-## Path Finding
-
-### Bounds Checking
-
-```python
-# Check if point is within map
-emergency_map.is_within_bounds((500.0, 500.0))  # True
-emergency_map.is_within_bounds((-10.0, 500.0))  # False
-```
-
-### Obstacles
-
-Add rectangular obstacles:
-
-```python
-# Add obstacle (start_corner, end_corner)
-emergency_map.obstacles.append(((100, 100), (200, 200)))
-
-# Check path
-emergency_map.is_path_clear((50, 150), (250, 150))  # False
-```
-
 ## Default Map
 
-Create a default emergency scenario:
+Create a default WUI emergency scenario:
 
 ```python
 from emmarl.envs.map import create_default_map
 
 emergency_map = create_default_map(
     width=1000.0,
-    height=1000.0
+    height=1000.0,
+    seed=42  # Optional: reproducible terrain
 )
 
 # Contains:
-# - 3 zones (fire, medical, crowd)
-# - 3 incidents
+# - WUI terrain with urban core, WUI zone, wildland
+# - Procedural road grid
+# - 2 fire incidents at wildland-urban interface
+# - 1 medical incident in urban core
+```
+
+## Simple Map (for testing)
+
+Create a simple map with basic rectangular terrain:
+
+```python
+from emmarl.envs.map import create_simple_map
+
+emergency_map = create_simple_map(width=500.0, height=500.0)
 ```
 
 ## Custom Scenarios
@@ -179,9 +231,13 @@ emergency_map = create_default_map(
 Build custom scenarios:
 
 ```python
-from emmarl.envs.map import EmergencyMap, Zone, Incident, ZoneType
+from emmarl.envs.map import EmergencyMap, Zone, Incident, ZoneType, TerrainType
 
 custom_map = EmergencyMap(width=2000.0, height=2000.0)
+
+# Add terrain
+custom_map.generate_wui_terrain(seed=123)
+custom_map.generate_road_grid()
 
 # Add zones
 custom_map.add_zone(Zone(
@@ -204,15 +260,15 @@ custom_map.add_incident(Incident(
 
 ## Integration with FireEnv
 
-Pass custom maps to FireEnv:
-
 ```python
 from emmarl.envs import FireEnv
 from emmarl.envs.fire_env import FireEnvConfig
 
-config = FireEnvConfig(map_width=2000.0, map_height=2000.0)
+# Use default WUI terrain
+config = FireEnvConfig(map_width=500.0, map_height=500.0)
 env = FireEnv(config)
 
-# Access the map
-env._emergency_map
+# Access terrain
+env._emergency_map.terrain
+env._emergency_map.get_terrain_at((250.0, 250.0))
 ```

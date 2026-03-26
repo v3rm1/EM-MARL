@@ -1,0 +1,190 @@
+{
+  "environment": {
+    "map_width": 1000.0,
+    "map_height": 1000.0,
+    "max_steps": 1000,
+    "agent_speed": 10.0,
+    "agent_vision_radius": 100.0,
+    "enable_fire_dynamics": true,
+    "wind_speed": 10.0,
+    "wind_direction": 0.0
+  },
+  "agents": {
+    "num_medics": 2,
+    "num_fire_force": 2,
+    "num_police": 2,
+    "num_civilians": 5,
+    "type_configs": {
+      "MEDIC": {
+        "max_speed": 8.0,
+        "max_acceleration": 4.0,
+        "stamina_cost_per_step": 1.5,
+        "can_run": true,
+        "run_multiplier": 1.5,
+        "can_climb": false,
+        "can_swim": false,
+        "resources": {
+          "medkits": 5,
+          "medication": 3
+        }
+      },
+      "FIRE_FORCE": {
+        "max_speed": 10.0,
+        "max_acceleration": 6.0,
+        "stamina_cost_per_step": 2.0,
+        "can_run": true,
+        "run_multiplier": 1.8,
+        "can_climb": true,
+        "can_swim": false,
+        "resources": {
+          "water": 100.0,
+          "foam": 50.0
+        }
+      },
+      "POLICE": {
+        "max_speed": 11.0,
+        "max_acceleration": 7.0,
+        "stamina_cost_per_step": 1.8,
+        "can_run": true,
+        "run_multiplier": 2.0,
+        "can_climb": false,
+        "can_swim": false,
+        "resources": {
+          "barriers": 10,
+          "flare": 5
+        }
+      },
+      "CIVILIAN": {
+        "max_speed": 7.0,
+        "max_acceleration": 3.0,
+        "stamina_cost_per_step": 1.0,
+        "can_run": true,
+        "run_multiplier": 1.2,
+        "can_climb": false,
+        "can_swim": false,
+        "resources": {}
+      }
+    }
+  },
+  "action_ranges": {
+    "heal_range": 30.0,
+    "medication_range": 20.0,
+    "firefighter_range": 50.0,
+    "foam_range": 40.0,
+    "police_range": 60.0,
+    "civilian_seek_help_distance": 100.0
+  },
+  "protection": {
+    "civilian_fire_range": 100.0,
+    "civilian_protection": 0.3,
+    "firefighter_protection": 0.1,
+    "medic_protection": 0.2,
+    "police_protection": 0.2
+  },
+  "movement": {
+    "safe_position_margin": 50.0,
+    "danger_threshold": 0.8,
+    "stamina_restore_rate": 0.5,
+    "stamina_run_cost_multiplier": 1.5,
+    "turn_rate": 0.2
+  },
+  "rewards": {
+    "incident_resolved": 100.0,
+    "casualty_prevented": 50.0,
+    "damage_reduced": 25.0,
+    "survived": 20.0,
+    "died": -100.0,
+    "stamina_penalty": -0.1,
+    "time_penalty": -0.01
+  },
+  "terrain": {
+    "OPEN": {
+      "speed_multiplier": 1.0,
+      "fuel_load": 0.1,
+      "fire_resistance": 0.9,
+      "heat_diffusion": 0.01
+    },
+    "FOREST": {
+      "speed_multiplier": 0.6,
+      "fuel_load": 0.9,
+      "fire_resistance": 0.1,
+      "heat_diffusion": 0.005
+    },
+    "GRASS": {
+      "speed_multiplier": 0.8,
+      "fuel_load": 0.6,
+      "fire_resistance": 0.3,
+      "heat_diffusion": 0.02
+    },
+    "URBAN": {
+      "speed_multiplier": 0.9,
+      "fuel_load": 0.4,
+      "fire_resistance": 0.5,
+      "heat_diffusion": 0.03
+    },
+    "ROAD": {
+      "speed_multiplier": 1.2,
+      "fuel_load": 0.0,
+      "fire_resistance": 1.0,
+      "heat_diffusion": 0.05
+    },
+    "WATER": {
+      "speed_multiplier": 0.0,
+      "fuel_load": 0.0,
+      "fire_resistance": 1.0,
+      "heat_diffusion": 0.1
+    },
+    "BUILDING": {
+      "speed_multiplier": 0.5,
+      "fuel_load": 0.5,
+      "fire_resistance": 0.6,
+      "heat_diffusion": 0.02
+    },
+    "BURNED": {
+      "speed_multiplier": 0.7,
+      "fuel_load": 0.0,
+      "fire_resistance": 1.0,
+      "heat_diffusion": 0.08
+    }
+  },
+  "fire_dynamics": {
+    "temperature": 25.0,
+    "humidity": 0.4,
+    "fuel_properties": {
+      "fuel_model": "GRASS",
+      "fuel_load": 1.0,
+      "fuel_depth": 1.0,
+      "moisture_content": 0.1,
+      "bulk_density": 0.1,
+      "surface_area_ratio": 1500.0,
+      "mineral_content": 0.055,
+      "effective_heating_number": 0.01,
+      "particle_density": 32.0,
+      "heat_diffusion_coefficient": 0.005
+    }
+  },
+  "map": {
+    "grid_width": 100,
+    "grid_height": 100,
+    "cell_size": 10.0
+  },
+  "rendering": {
+    "figure_size": [14, 10],
+    "map_dpi": 100,
+    "graph_dpi": 100,
+    "show_grid": true,
+    "show_legend": true,
+    "agent_marker_size": 100,
+    "zone_alpha": 0.3,
+    "incident_alpha": 0.6,
+    "show_metrics": true,
+    "metrics_height": 0.25
+  },
+  "graph_filter": {
+    "proximity_radius": 100.0,
+    "show_collaboration": true,
+    "show_hierarchy": true,
+    "show_proximity": true,
+    "show_alive_only": true
+  }
+}

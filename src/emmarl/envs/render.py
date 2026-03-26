@@ -39,6 +39,30 @@ class RenderConfig:
     show_metrics: bool = True
     metrics_height: float = 0.25
 
+    @classmethod
+    def from_config(cls, config_dict: dict[str, Any]) -> RenderConfig:
+        """Create RenderConfig from dictionary.
+
+        Args:
+            config_dict: Dictionary with rendering config values.
+
+        Returns:
+            RenderConfig instance.
+        """
+        figure_size = tuple(config_dict.get("figure_size", [14, 10]))
+        return cls(
+            figure_size=figure_size,
+            map_dpi=config_dict.get("map_dpi", 100),
+            graph_dpi=config_dict.get("graph_dpi", 100),
+            show_grid=config_dict.get("show_grid", True),
+            show_legend=config_dict.get("show_legend", True),
+            agent_marker_size=config_dict.get("agent_marker_size", 100),
+            zone_alpha=config_dict.get("zone_alpha", 0.3),
+            incident_alpha=config_dict.get("incident_alpha", 0.6),
+            show_metrics=config_dict.get("show_metrics", True),
+            metrics_height=config_dict.get("metrics_height", 0.25),
+        )
+
 
 @dataclass
 class GraphFilter:
@@ -53,6 +77,24 @@ class GraphFilter:
     proximity_radius: float = 100.0
     min_stamina: float | None = None
     show_alive_only: bool = True
+
+    @classmethod
+    def from_config(cls, config_dict: dict[str, Any]) -> GraphFilter:
+        """Create GraphFilter from dictionary.
+
+        Args:
+            config_dict: Dictionary with graph filter config values.
+
+        Returns:
+            GraphFilter instance.
+        """
+        return cls(
+            show_collaboration=config_dict.get("show_collaboration", True),
+            show_hierarchy=config_dict.get("show_hierarchy", True),
+            show_proximity=config_dict.get("show_proximity", True),
+            proximity_radius=config_dict.get("proximity_radius", 100.0),
+            show_alive_only=config_dict.get("show_alive_only", True),
+        )
 
 
 class FireSimRenderer:

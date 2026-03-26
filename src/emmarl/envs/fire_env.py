@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -10,7 +11,15 @@ from gymnasium import spaces
 from pettingzoo import AECEnv
 from pettingzoo.utils.agent_selector import AgentSelector
 
-from emmarl.envs.agent import AgentConfig, AgentState, AgentType, AgentStatus
+from emmarl.envs.agent import (
+    AgentConfig,
+    AgentState,
+    AgentType,
+    AgentStatus,
+    AgentTypeConfig,
+    MovementConfig,
+)
+from emmarl.envs.config_loader import SimulationConfig, load_config
 from emmarl.envs.map import ZoneType, create_default_map
 from emmarl.envs.fire_dynamics import (
     FireModel,
@@ -53,6 +62,70 @@ class FireEnvConfig:
             "time_penalty": -0.01,
         }
     )
+    action_ranges: dict[str, float] = field(
+        default_factory=lambda: {
+            "heal_range": 30.0,
+            "medication_range": 20.0,
+            "firefighter_range": 50.0,
+            "foam_range": 40.0,
+            "police_range": 60.0,
+            "civilian_seek_help_distance": 100.0,
+        }
+    )
+    protection: dict[str, float] = field(
+        default_factory=lambda: {
+            "civilian_fire_range": 100.0,
+            "civilian_protection": 0.3,
+            "firefighter_protection": 0.1,
+            "medic_protection": 0.2,
+            "police_protection": 0.2,
+        }
+    )
+    movement: dict[str, float] = field(
+        default_factory=lambda: {
+            "safe_position_margin": 50.0,
+            "danger_threshold": 0.8,
+            "stamina_restore_rate": 0.5,
+            "stamina_run_cost_multiplier": 1.5,
+            "turn_rate": 0.2,
+        }
+    )
+
+    @classmethod
+    def from_config(cls, config: SimulationConfig) -> FireEnvConfig:
+        """Create FireEnvConfig from SimulationConfig.
+
+        Args:
+            config: SimulationConfig instance with loaded JSON config.
+
+        Returns:
+            FireEnvConfig instance.
+        """
+        env = config.environment
+        agents = config.agents
+        rewards = config.rewards
+        action_ranges = config.action_ranges
+        protection = config.protection
+        movement = config.movement
+
+        return cls(
+            num_medics=agents.get("num_medics", 2),
+            num_fire_force=agents.get("num_fire_force", 2),
+            num_police=agents.get("num_police", 2),
+            num_civilians=agents.get("num_civilians", 5),
+            map_width=env.get("map_width", 1000.0),
+            map_height=env.get("map_height", 1000.0),
+            max_steps=env.get("max_steps", 1000),
+            agent_speed=env.get("agent_speed", 10.0),
+            agent_vision_radius=env.get("agent_vision_radius", 100.0),
+            enable_fire_dynamics=env.get("enable_fire_dynamics", True),
+            wind_speed=env.get("wind_speed", 10.0),
+            wind_direction=env.get("wind_direction", 0.0),
+            reward_weights=rewards.copy(),
+            action_ranges=action_ranges.copy(),
+            protection=protection.copy(),
+            movement=movement.copy(),
+        )
 
 
 class FireEnv(AECEnv):
@@ -71,14 +144,36 @@ class FireEnv(AECEnv):
 
     metadata: dict = {"render_modes": ["human"], "name": "emmarl_v0"}
 
-    def __init__(self, config: FireEnvConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: FireEnvConfig | SimulationConfig | str | Path | None = None,
+    ) -> None:
         """Initialize the FireSim environment.
 
         Args:
-            config: Environment configuration. Uses defaults if None.
+            config: Environment configuration. Can be:
+                - FireEnvConfig: Use directly
+                - SimulationConfig: Convert to FireEnvConfig
+                - str/Path: Load JSON file and convert
+                - None: Use defaults
         """
         super().__init__()
-        self.config = config or FireEnvConfig()
+
+        self._simulation_config: SimulationConfig | None = None
+
+        if config is None:
+            self.config = FireEnvConfig()
+        elif isinstance(config, FireEnvConfig):
+            self.config = config
+        elif isinstance(config, SimulationConfig):
+            self._simulation_config = config
+            self.config = FireEnvConfig.from_config(config)
+        elif isinstance(config, (str, Path)):
+            loaded_config = load_config(config)
+            self._simulation_config = loaded_config
+            self.config = FireEnvConfig.from_config(loaded_config)
+        else:
+            self.config = FireEnvConfig()
 
         self.possible_agents = self._create_agent_ids()
         self.agents = self.possible_agents.copy()
@@ -102,12 +197,41 @@ class FireEnv(AECEnv):
         self._resolved_incidents = 0
 
         self._renderer: FireSimRenderer | None = None
-        self._render_config = RenderConfig()
+        if self._simulation_config is not None:
+            self._render_config = RenderConfig.from_config(
+                self._simulation_config.rendering
+            )
+        else:
+            self._render_config = RenderConfig()
 
         self._fire_model: FireModel | None = None
         self._initialize_fire_model()
 
         self._episode_metrics = EpisodeMetrics()
+
+        self._apply_agent_type_configs()
+
+    def _apply_agent_type_configs(self) -> None:
+        """Apply agent type configurations from simulation config."""
+        if self._simulation_config is None:
+            return
+
+        config_dict = self._simulation_config.agents.get("type_configs", {})
+        for agent_type_str, type_config in config_dict.items():
+            try:
+                agent_type = AgentType[agent_type_str]
+                movement_config = MovementConfig(
+                    max_speed=type_config.get("max_speed", 10.0),
+                    max_acceleration=type_config.get("max_acceleration", 5.0),
+                    stamina_cost_per_step=type_config.get("stamina_cost_per_step", 1.0),
+                    can_run=type_config.get("can_run", True),
+                    run_multiplier=type_config.get("run_multiplier", 2.0),
+                    can_climb=type_config.get("can_climb", False),
+                    can_swim=type_config.get("can_swim", False),
+                )
+                AgentTypeConfig.set_config(agent_type, movement_config)
+            except KeyError:
+                pass
 
     def _create_agent_ids(self) -> list[str]:
         """Create agent IDs for all agents."""
@@ -266,11 +390,13 @@ class FireEnv(AECEnv):
         if not self.config.enable_fire_dynamics or self._fire_model is None:
             return
 
-        CIVILIAN_FIRE_RANGE = 100.0
-        CIVILIAN_PROTECTION = 0.3
-        FIREFIGHTER_PROTECTION = 0.1
-        MEDIC_PROTECTION = 0.2
-        POLICE_PROTECTION = 0.2
+        civilian_fire_range = self.config.protection.get("civilian_fire_range", 100.0)
+        civilian_protection = self.config.protection.get("civilian_protection", 0.3)
+        firefighter_protection = self.config.protection.get(
+            "firefighter_protection", 0.1
+        )
+        medic_protection = self.config.protection.get("medic_protection", 0.2)
+        police_protection = self.config.protection.get("police_protection", 0.2)
 
         for agent in self.agents:
             state = self._agent_states[agent]
@@ -289,26 +415,26 @@ class FireEnv(AECEnv):
             protection = 1.0
 
             if agent_type == AgentType.CIVILIAN:
-                protection = CIVILIAN_PROTECTION
+                protection = civilian_protection
                 if fire_intensity <= 0 and flame_length <= 0:
                     continue
             elif agent_type == AgentType.FIRE_FORCE:
-                protection = FIREFIGHTER_PROTECTION
+                protection = firefighter_protection
             elif agent_type == AgentType.MEDIC:
-                protection = MEDIC_PROTECTION
+                protection = medic_protection
             elif agent_type == AgentType.POLICE:
-                protection = POLICE_PROTECTION
+                protection = police_protection
 
             effective_fire = fire_intensity * protection
             effective_flame = flame_length * protection
 
             if agent_type == AgentType.CIVILIAN:
                 dist, _ = self._get_fire_distance(position)
-                if dist > CIVILIAN_FIRE_RANGE:
+                if dist > civilian_fire_range:
                     continue
-                if dist < CIVILIAN_FIRE_RANGE:
-                    effective_fire *= 1.0 - dist / CIVILIAN_FIRE_RANGE
-                    effective_flame *= 1.0 - dist / CIVILIAN_FIRE_RANGE
+                if dist < civilian_fire_range:
+                    effective_fire *= 1.0 - dist / civilian_fire_range
+                    effective_flame *= 1.0 - dist / civilian_fire_range
 
             if effective_fire > 0:
                 state.take_fire_damage(effective_fire, 1.0)
@@ -451,7 +577,7 @@ class FireEnv(AECEnv):
 
     def _get_random_safe_position(self) -> tuple[float, float]:
         """Get a random safe position on the map."""
-        margin = 50.0
+        margin = self.config.movement.get("safe_position_margin", 50.0)
         max_width = self.config.map_width
         max_height = self.config.map_height
         while True:
@@ -561,7 +687,7 @@ class FireEnv(AECEnv):
             )
             heading_diff = desired_heading - current_heading
             heading_diff = np.arctan2(np.sin(heading_diff), np.cos(heading_diff))
-            turn_rate = 0.2
+            turn_rate = self.config.movement.get("turn_rate", 0.2)
             new_heading = current_heading + heading_diff * turn_rate
             speed = min(current_speed, effective_max_speed)
             new_vx = np.cos(new_heading) * speed
@@ -585,7 +711,8 @@ class FireEnv(AECEnv):
 
             if can_move:
                 danger = self._get_danger_level((new_x, new_y))
-                if danger < 0.8:
+                danger_threshold = self.config.movement.get("danger_threshold", 0.8)
+                if danger < danger_threshold:
                     state.position = (new_x, new_y)
 
                     dist_moved = np.sqrt(
@@ -600,7 +727,8 @@ class FireEnv(AECEnv):
                     state.use_stamina(stamina_cost)
 
         if not state.is_moving and state.stamina < move_config.stamina_cost_per_step:
-            state.restore_stamina(0.5)
+            stamina_restore_rate = self.config.movement.get("stamina_restore_rate", 0.5)
+            state.restore_stamina(stamina_restore_rate)
 
     def _handle_type_specific_actions(
         self, agent: str, agent_type: AgentType, action: Any, state: AgentState
@@ -642,7 +770,10 @@ class FireEnv(AECEnv):
                 (state.position[0] - other_state.position[0]) ** 2
                 + (state.position[1] - other_state.position[1]) ** 2
             )
-            if dist < 30 and other_state.health < 100:
+            if (
+                dist < self.config.action_ranges.get("heal_range", 30.0)
+                and other_state.health < 100
+            ):
                 if config.consume_resource("medkits", 1):
                     other_state.heal(30)
                     break
@@ -661,7 +792,10 @@ class FireEnv(AECEnv):
                 (state.position[0] - other_state.position[0]) ** 2
                 + (state.position[1] - other_state.position[1]) ** 2
             )
-            if dist < 20 and other_state.health < 50:
+            if (
+                dist < self.config.action_ranges.get("medication_range", 20.0)
+                and other_state.health < 50
+            ):
                 if config.consume_resource("medication", 1):
                     other_state.heal(50)
                     break
@@ -676,16 +810,16 @@ class FireEnv(AECEnv):
         if not config.has_resource("water", 10):
             return
 
-        FIREFIGHTER_RANGE = 50.0
+        firefighter_range = self.config.action_ranges.get("firefighter_range", 50.0)
 
         incident, dist = self._emergency_map.get_nearest_active_incident(state.position)
         if (
             incident
-            and dist < FIREFIGHTER_RANGE
+            and dist < firefighter_range
             and incident.incident_type == ZoneType.FIRE
         ):
             if config.consume_resource("water", 10):
-                effectiveness = 1.0 - (dist / FIREFIGHTER_RANGE)
+                effectiveness = 1.0 - (dist / firefighter_range)
                 incident.reduce_severity(0.2 * effectiveness)
                 if incident.is_resolved():
                     self._resolved_incidents += 1
@@ -699,12 +833,12 @@ class FireEnv(AECEnv):
         if not config.has_resource("foam", 5):
             return
 
-        FOAM_RANGE = 40.0
+        foam_range = self.config.action_ranges.get("foam_range", 40.0)
 
         incident, dist = self._emergency_map.get_nearest_active_incident(state.position)
         if (
             incident
-            and dist < FOAM_RANGE
+            and dist < foam_range
             and incident.incident_type
             in (
                 ZoneType.FIRE,
@@ -712,7 +846,7 @@ class FireEnv(AECEnv):
             )
         ):
             if config.consume_resource("foam", 5):
-                effectiveness = 1.0 - (dist / FOAM_RANGE)
+                effectiveness = 1.0 - (dist / foam_range)
                 incident.reduce_severity(0.3 * effectiveness)
                 if incident.is_resolved():
                     self._resolved_incidents += 1
@@ -722,15 +856,15 @@ class FireEnv(AECEnv):
 
         Police must be at the scene (within range) to respond to the event.
         """
-        POLICE_RANGE = 60.0
+        police_range = self.config.action_ranges.get("police_range", 60.0)
 
         incident, dist = self._emergency_map.get_nearest_active_incident(state.position)
         if (
             incident
-            and dist < POLICE_RANGE
+            and dist < police_range
             and incident.incident_type == ZoneType.CROWDED
         ):
-            effectiveness = 1.0 - (dist / POLICE_RANGE)
+            effectiveness = 1.0 - (dist / police_range)
             incident.reduce_severity(0.15 * effectiveness)
             if incident.is_resolved():
                 self._resolved_incidents += 1
@@ -744,7 +878,10 @@ class FireEnv(AECEnv):
     def _civilian_seek_help(self, agent: str, state: AgentState) -> None:
         """Civilian seeks help from responders."""
         nearest_incident, dist = self._get_nearest_active_incident(state.position)
-        if nearest_incident and dist > 100:
+        seek_help_distance = self.config.action_ranges.get(
+            "civilian_seek_help_distance", 100.0
+        )
+        if nearest_incident and dist > seek_help_distance:
             nearest_responder = self._find_nearest_responder(state.position)
             if nearest_responder:
                 direction = (

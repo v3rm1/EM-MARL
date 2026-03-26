@@ -74,6 +74,51 @@ class AgentTypeConfig:
         run_multiplier=1.2,
     )
 
+    @classmethod
+    def from_dict(
+        cls, agent_type: AgentType, config_dict: dict[str, Any]
+    ) -> MovementConfig:
+        """Create MovementConfig from dictionary.
+
+        Args:
+            agent_type: The agent type.
+            config_dict: Dictionary with movement config values.
+
+        Returns:
+            MovementConfig instance.
+        """
+        return MovementConfig(
+            max_speed=config_dict.get("max_speed", 10.0),
+            max_acceleration=config_dict.get("max_acceleration", 5.0),
+            stamina_cost_per_step=config_dict.get("stamina_cost_per_step", 1.0),
+            can_run=config_dict.get("can_run", True),
+            run_multiplier=config_dict.get("run_multiplier", 2.0),
+            can_climb=config_dict.get("can_climb", False),
+            can_swim=config_dict.get("can_swim", False),
+        )
+
+    @classmethod
+    def get_default(cls, agent_type: AgentType) -> MovementConfig:
+        """Get default config for an agent type.
+
+        Args:
+            agent_type: The agent type.
+
+        Returns:
+            MovementConfig instance.
+        """
+        return getattr(cls, agent_type.name)
+
+    @classmethod
+    def set_config(cls, agent_type: AgentType, config: MovementConfig) -> None:
+        """Set custom config for an agent type.
+
+        Args:
+            agent_type: The agent type.
+            config: MovementConfig to set.
+        """
+        setattr(cls, agent_type.name, config)
+
 
 @dataclass
 class AgentConfig:
@@ -98,6 +143,32 @@ class AgentConfig:
         """Get movement config for this agent type."""
         return getattr(AgentTypeConfig, self.agent_type.name)
 
+    @classmethod
+    def from_config(
+        cls,
+        agent_type: AgentType,
+        agent_id: str,
+        position: tuple[float, float],
+        resources: dict[str, float] | None = None,
+    ) -> "AgentConfig":
+        """Create AgentConfig from simulation config.
+
+        Args:
+            agent_type: The type of agent.
+            agent_id: Unique identifier for the agent.
+            position: Initial position of the agent.
+            resources: Optional resources dict. Uses defaults if None.
+
+        Returns:
+            AgentConfig instance.
+        """
+        return cls(
+            agent_type=agent_type,
+            agent_id=agent_id,
+            position=position,
+            resources=resources,
+        )
+
     def _default_resources(self) -> dict[str, float]:
         """Get default resources based on agent type."""
         defaults = {
@@ -107,6 +178,14 @@ class AgentConfig:
             AgentType.CIVILIAN: {},
         }
         return defaults.get(self.agent_type, {}).copy()
+
+    def set_resources(self, resources: dict[str, float]) -> None:
+        """Set resources from config dictionary.
+
+        Args:
+            resources: Dictionary of resource_name -> amount.
+        """
+        self.resources = resources.copy()
 
     def has_resource(self, resource: str, amount: float = 1.0) -> bool:
         """Check if agent has sufficient resource."""

@@ -13,8 +13,14 @@ from emmarl.envs import FireEnv
 #### Constructor
 
 ```python
-FireEnv(config: FireEnvConfig | None = None)
+FireEnv(config: FireEnvConfig | SimulationConfig | str | Path | None = None)
 ```
+
+The `config` parameter accepts:
+- `FireEnvConfig` - Direct configuration object
+- `SimulationConfig` - Loaded JSON configuration
+- `str | Path` - Path to JSON config file
+- `None` - Use defaults
 
 #### Methods
 
@@ -93,6 +99,69 @@ from emmarl.envs.fire_env import FireEnvConfig
 | `agent_speed` | float | 10.0 | Base agent speed |
 | `agent_vision_radius` | float | 100.0 | Observation radius |
 | `reward_weights` | dict | {...} | Reward components |
+
+---
+
+### SimulationConfig
+
+JSON configuration loader for FireEnv.
+
+```python
+from emmarl.envs.config_loader import SimulationConfig, load_config
+```
+
+#### Constructor
+
+```python
+SimulationConfig(config_path: str | Path | None = None)
+```
+
+If `config_path` is None, loads the default configuration from `default_config.json`.
+
+#### Class Method
+
+##### from_config
+
+```python
+FireEnvConfig.from_config(config: SimulationConfig) -> FireEnvConfig
+```
+
+Create a FireEnvConfig from a SimulationConfig.
+
+#### Factory Function
+
+##### load_config
+
+```python
+load_config(config_path: str | Path | None = None) -> SimulationConfig
+```
+
+Load simulation configuration from a JSON file.
+
+```python
+# Load custom config
+config = load_config("path/to/config.json")
+env = FireEnv(config)
+
+# Or pass directly to FireEnv
+env = FireEnv("path/to/config.json")
+```
+
+#### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `environment` | dict | Environment configuration |
+| `agents` | dict | Agent configuration |
+| `rewards` | dict | Reward weights |
+| `terrain` | dict | Terrain properties |
+| `fire_dynamics` | dict | Fire dynamics config |
+| `map_config` | dict | Map configuration |
+| `rendering` | dict | Rendering configuration |
+| `graph_filter` | dict | Graph filter config |
+| `action_ranges` | dict | Action range values |
+| `protection` | dict | Protection factors |
+| `movement` | dict | Movement parameters |
 
 ---
 

@@ -37,6 +37,9 @@ class FuelProperties:
     mineral_content: float = 0.055
     effective_heating_number: float = 0.01
     particle_density: float = 32.0
+    heat_diffusion_coefficient: float = 0.005
+    canopy_base_height: float = 0.0
+    canopy_fuel_load: float = 0.0
 
     @staticmethod
     def from_terrain(
@@ -51,11 +54,17 @@ class FuelProperties:
             "water": FuelModel.WATER,
         }
         model = model_map.get(terrain_type.lower(), FuelModel.GRASS)
+
+        canopy_base = 3.0 if terrain_type.lower() == "forest" else 0.0
+        canopy_fuel = 0.8 if terrain_type.lower() == "forest" else 0.0
+
         return FuelProperties(
             fuel_model=model,
             fuel_load=fuel_load,
             moisture_content=moisture,
             bulk_density=fuel_load / 2.0,
+            canopy_base_height=canopy_base,
+            canopy_fuel_load=canopy_fuel,
         )
 
 
@@ -87,6 +96,182 @@ class FireState:
     fuel_consumed: float = 0.0
     is_spreading: bool = False
     spread_direction: float = 0.0
+    temperature: float = 300.0
+    pre_heating: float = 0.0
+    is_crown_fire: bool = False
+    ember_count: int = 0
+
+
+@dataclass
+class HeatMap:
+    """Heat map for thermal diffusion between cells."""
+
+    width: int
+    height: int
+    temperatures: np.ndarray | None = None
+    preheat_levels: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        self.temperatures = np.full((self.height, self.width), 300.0, dtype=np.float32)
+        self.preheat_levels = np.zeros((self.height, self.width), dtype=np.float32)
+
+    def get_temp_at(self, grid_x: int, grid_y: int) -> float:
+        """Get temperature at grid cell."""
+        if 0 <= grid_x < self.width and 0 <= grid_y < self.height:
+            return float(self.temperatures[grid_y, grid_x])
+        return 300.0
+
+    def get_preheat_at(self, grid_x: int, grid_y: int) -> float:
+        """Get pre-heat level at grid cell."""
+        if 0 <= grid_x < self.width and 0 <= grid_y < self.height:
+            return float(self.preheat_levels[grid_y, grid_x])
+        return 0.0
+
+    def set_temp_at(self, grid_x: int, grid_y: int, temp: float) -> None:
+        """Set temperature at grid cell."""
+        if 0 <= grid_x < self.width and 0 <= grid_y < self.height:
+            self.temperatures[grid_y, grid_x] = temp
+
+    def set_preheat_at(self, grid_x: int, grid_y: int, preheat: float) -> None:
+        """Set pre-heat level at grid cell."""
+        if 0 <= grid_x < self.width and 0 <= grid_y < self.height:
+            self.preheat_levels[grid_y, grid_x] = preheat
+
+    def diffuse_heat(
+        self,
+        diffusion_coef: float,
+        dt: float,
+        fire_positions: list[tuple[int, int]],
+        fire_temperatures: list[float],
+    ) -> None:
+        """Apply thermal diffusion to adjacent cells."""
+        new_temps = self.temperatures.copy()
+
+        for gy in range(self.height):
+            for gx in range(self.width):
+                current_temp = self.temperatures[gy, gx]
+
+                if (gx, gy) in fire_positions:
+                    continue
+
+                neighbor_sum = 0.0
+                neighbor_count = 0
+
+                for dy in [-1, 0, 1]:
+                    for dx in [-1, 0, 1]:
+                        if dx == 0 and dy == 0:
+                            continue
+                        nx, ny = gx + dx, gy + dy
+                        if 0 <= nx < self.width and 0 <= ny < self.height:
+                            neighbor_sum += self.temperatures[ny, nx]
+                            neighbor_count += 1
+
+                if neighbor_count > 0:
+                    avg_neighbor = neighbor_sum / neighbor_count
+                    new_temps[gy, gx] = (
+                        current_temp
+                        + diffusion_coef * (avg_neighbor - current_temp) * dt
+                    )
+
+        self.temperatures = new_temps
+
+    def apply_fire_heat(
+        self,
+        grid_x: int,
+        grid_y: int,
+        fire_temp: float,
+        radius: int = 1,
+    ) -> None:
+        """Apply heat from fire to nearby cells."""
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                nx, ny = grid_x + dx, grid_y + dy
+                if 0 <= nx < self.width and 0 <= ny < self.height:
+                    dist = np.sqrt(dx * dx + dy * dy)
+                    if dist > 0:
+                        falloff = 1.0 / (1.0 + dist * 0.5)
+                        self.temperatures[ny, nx] = max(
+                            self.temperatures[ny, nx], fire_temp * falloff
+                        )
+
+
+@dataclass
+class FirePerimeter:
+    """Fire perimeter tracking for polygon-based evolution."""
+
+    points: list[tuple[float, float]] = field(default_factory=list)
+    area: float = 0.0
+    perimeter: float = 0.0
+
+    def add_point(self, x: float, y: float) -> None:
+        """Add a point to the perimeter."""
+        self.points.append((x, y))
+
+    def compute_metrics(self) -> None:
+        """Compute area and perimeter from points."""
+        if len(self.points) < 3:
+            self.area = 0.0
+            self.perimeter = 0.0
+            return
+
+        area = 0.0
+        perimeter = 0.0
+        n = len(self.points)
+
+        for i in range(n):
+            x1, y1 = self.points[i]
+            x2, y2 = self.points[(i + 1) % n]
+            area += x1 * y2 - x2 * y1
+            perimeter += np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+
+        self.area = abs(area) / 2.0
+        self.perimeter = perimeter
+
+    def is_point_inside(self, x: float, y: float) -> bool:
+        """Ray casting algorithm for point in polygon."""
+        if len(self.points) < 3:
+            return False
+
+        inside = False
+        n = len(self.points)
+        j = n - 1
+
+        for i in range(n):
+            xi, yi = self.points[i]
+            xj, yj = self.points[j]
+
+            if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+                inside = not inside
+            j = i
+
+        return inside
+
+
+@dataclass
+class Ember:
+    """Ember for fire spotting."""
+
+    position: tuple[float, float]
+    velocity: tuple[float, float]
+    lifetime: float = 0.0
+    max_lifetime: float = 10.0
+
+    def update(self, dt: float, wind_speed: float, wind_dir: float) -> None:
+        """Update ember position and lifetime."""
+        self.lifetime += dt
+
+        rad = np.radians(wind_dir)
+        base_vx = wind_speed * 0.3 * np.cos(rad)
+        base_vy = wind_speed * 0.3 * np.sin(rad)
+
+        self.position = (
+            self.position[0] + (self.velocity[0] + base_vx) * dt,
+            self.position[1] + (self.velocity[1] + base_vy) * dt,
+        )
+
+    def is_active(self) -> bool:
+        """Check if ember is still active."""
+        return self.lifetime < self.max_lifetime
 
 
 @dataclass
@@ -193,6 +378,88 @@ class FireDynamics:
         """Compute flame angle from wind speed (radians)."""
         return np.arctan(0.93 * wind_speed / 3.0)
 
+    def compute_crown_fire_transition(
+        self, fuel: FuelProperties, surface_ros: float, surface_intensity: float
+    ) -> bool:
+        """Determine if crown fire transition should occur.
+
+        Uses Rothermel crown fire transition criteria:
+        - Critical surface fire intensity > 300 kW/m
+        - Crown base height < 6m
+        - Canopy bulk density > 0.1 kg/m³
+        """
+        critical_intensity = 300.0
+        can_transition = (
+            surface_intensity > critical_intensity
+            and fuel.canopy_base_height > 0
+            and fuel.canopy_base_height < 6.0
+            and fuel.canopy_fuel_load > 0.1
+        )
+        return can_transition
+
+    def compute_crown_fire_ros(self, fuel: FuelProperties, surface_ros: float) -> float:
+        """Compute crown fire rate of spread (m/s).
+
+        Crown fire spreads faster than surface fire.
+        """
+        if fuel.canopy_base_height <= 0 or fuel.canopy_fuel_load <= 0:
+            return surface_ros
+
+        crown_ros_mult = 1.5 + (self.weather.wind_speed / 20.0)
+        return surface_ros * crown_ros_mult
+
+    def compute_spotting_probability(
+        self, fire_intensity: float, wind_speed: float
+    ) -> float:
+        """Compute probability of fire spotting.
+
+        Higher fire intensity and wind speed increase spotting.
+        """
+        if fire_intensity <= 0 or wind_speed < 1.0:
+            return 0.0
+
+        base_prob = fire_intensity * wind_speed * 0.0001
+        return min(base_prob, 0.3)
+
+    def compute_max_spotting_distance(self, wind_speed: float) -> float:
+        """Compute maximum spotting distance in meters.
+
+        Embers can travel up to ~2.5x wind speed in km.
+        """
+        return 2.5 * wind_speed * 1000.0
+
+    def compute_containment_effectiveness(
+        self,
+        line_position: tuple[float, float],
+        fire_position: tuple[float, float],
+        line_width: float = 3.0,
+    ) -> float:
+        """Compute containment line effectiveness (0-1).
+
+        Closer fire to line = higher containment probability.
+        """
+        dist = np.sqrt(
+            (fire_position[0] - line_position[0]) ** 2
+            + (fire_position[1] - line_position[1]) ** 2
+        )
+
+        if dist < line_width:
+            return 0.95
+        elif dist < 50.0:
+            return 0.8 * (1.0 - dist / 50.0)
+        return 0.0
+
+    def compute_preheat_effect(
+        self, cell_temp: float, ambient_temp: float = 300.0
+    ) -> float:
+        """Compute pre-heating effect on ignition time.
+
+        Higher temperatures reduce time to ignition.
+        """
+        temp_excess = max(0.0, cell_temp - ambient_temp)
+        ignition_time_reduction = 1.0 - min(temp_excess / 500.0, 0.8)
+        return ignition_time_reduction
+
     def compute_spread_direction(
         self, fuel: FuelProperties, position: tuple[float, float]
     ) -> float:
@@ -237,8 +504,18 @@ class FireModel:
     fires: list[FireState] = field(default_factory=list)
     ignition_points: list[tuple[float, float, float]] = field(default_factory=list)
     containment_lines: list[list[tuple[float, float]]] = field(default_factory=list)
+    embers: list[Ember] = field(default_factory=list)
+    perimeter: FirePerimeter = field(default_factory=FirePerimeter)
+    heat_map: HeatMap | None = None
     time: float = 0.0
     dt: float = 1.0
+
+    grid_width: int = 100
+    grid_height: int = 100
+
+    def __post_init__(self) -> None:
+        if self.heat_map is None:
+            self.heat_map = HeatMap(width=self.grid_width, height=self.grid_height)
 
     def add_ignition(
         self, position: tuple[float, float], intensity: float = 1.0
@@ -250,25 +527,203 @@ class FireModel:
                 position=position,
                 intensity=intensity,
                 is_spreading=True,
+                temperature=800.0,
             )
         )
+        self.perimeter.add_point(position[0], position[1])
 
     def add_containment_line(self, line: list[tuple[float, float]]) -> None:
         """Add a fire containment line."""
         self.containment_lines.append(line)
 
+    def _update_heat_diffusion(
+        self, fuel_map: dict[tuple[float, float], FuelProperties]
+    ) -> None:
+        """Update heat transfer between cells."""
+        if self.heat_map is None:
+            return
+
+        fire_positions = []
+        fire_temps = []
+
+        for fire in self.fires:
+            if fire.is_spreading and fire.intensity > 0.1:
+                gx = int(fire.position[0] / 10)
+                gy = int(fire.position[1] / 10)
+                fire_positions.append((gx, gy))
+                fire_temps.append(500.0 + fire.fire_line_intensity)
+
+        if not fire_positions:
+            return
+
+        diffusion_coef = 0.05
+        self.heat_map.diffuse_heat(diffusion_coef, self.dt, fire_positions, fire_temps)
+
+        for (gx, gy), temp in zip(fire_positions, fire_temps):
+            self.heat_map.apply_fire_heat(gx, gy, temp, radius=2)
+
+    def _update_spotting(
+        self, fuel_map: dict[tuple[float, float], FuelProperties]
+    ) -> None:
+        """Update fire spotting/ember transport."""
+        wind_speed = self.dynamics.weather.wind_speed
+        wind_dir = self.dynamics.weather.wind_direction
+
+        for ember in self.embers:
+            if ember.is_active():
+                ember.update(self.dt, wind_speed, wind_dir)
+
+                gx = int(ember.position[0] / 10)
+                gy = int(ember.position[1] / 10)
+
+                if 0 <= gx < self.grid_width and 0 <= gy < self.grid_height:
+                    fuel_key = (gx * 10, gy * 10)
+                    fuel = fuel_map.get(fuel_key, FuelProperties(FuelModel.GRASS))
+
+                    if fuel.fuel_load > 0.1 and fuel.fuel_load < 0.9:
+                        self.add_ignition(ember.position, 0.3)
+
+        self.embers = [e for e in self.embers if e.is_active()]
+
+        for fire in self.fires:
+            if not fire.is_spreading:
+                continue
+
+            spotting_prob = self.dynamics.compute_spotting_probability(
+                fire.fire_line_intensity, wind_speed
+            )
+
+            if np.random.random() < spotting_prob * self.dt:
+                max_dist = self.dynamics.compute_max_spotting_distance(wind_speed)
+
+                angle = np.random.uniform(0, 2 * np.pi)
+                distance = np.random.uniform(50, min(max_dist, 500))
+
+                ember_pos = (
+                    fire.position[0] + distance * np.cos(angle),
+                    fire.position[1] + distance * np.sin(angle),
+                )
+
+                ember_vel = (
+                    np.random.uniform(-2, 2),
+                    np.random.uniform(-2, 2),
+                )
+
+                self.embers.append(Ember(position=ember_pos, velocity=ember_vel))
+
+    def _update_crown_fire(
+        self, fuel_map: dict[tuple[float, float], FuelProperties]
+    ) -> None:
+        """Update crown fire dynamics."""
+        for fire in self.fires:
+            if not fire.is_spreading:
+                continue
+
+            fuel_key = (int(fire.position[0]), int(fire.position[1]))
+            fuel = fuel_map.get(fuel_key, FuelProperties(FuelModel.GRASS))
+
+            if fuel.canopy_base_height > 0:
+                is_crown = self.dynamics.compute_crown_fire_transition(
+                    fuel, fire.rate_of_spread, fire.fire_line_intensity
+                )
+                fire.is_crown_fire = is_crown
+
+                if is_crown:
+                    fire.rate_of_spread = self.dynamics.compute_crown_fire_ros(
+                        fuel, fire.rate_of_spread
+                    )
+                    fire.rate_of_spread = min(fire.rate_of_spread, 150.0)
+
+    def _update_containment(
+        self, fuel_map: dict[tuple[float, float], FuelProperties]
+    ) -> None:
+        """Update containment line effectiveness."""
+        for fire in self.fires:
+            if not fire.is_spreading:
+                continue
+
+            for line in self.containment_lines:
+                for line_point in line:
+                    effectiveness = self.dynamics.compute_containment_effectiveness(
+                        line_point, fire.position
+                    )
+
+                    if np.random.random() < effectiveness * 0.1 * self.dt:
+                        fire.rate_of_spread *= 0.5
+
+    def _update_pyrolysis(
+        self, fuel_map: dict[tuple[float, float], FuelProperties]
+    ) -> None:
+        """Update pyrolysis/pre-heating zones."""
+        if self.heat_map is None:
+            return
+
+        for fire in self.fires:
+            if not fire.is_spreading:
+                continue
+
+            gx = int(fire.position[0] / 10)
+            gy = int(fire.position[1] / 10)
+
+            for dy in range(-3, 4):
+                for dx in range(-3, 4):
+                    nx, ny = gx + dx, gy + dy
+                    if 0 <= nx < self.grid_width and 0 <= ny < self.grid_height:
+                        dist = np.sqrt(dx * dx + dy * dy)
+                        if dist > 0:
+                            preheat = 0.3 / (dist * 0.5)
+                            current_preheat = self.heat_map.get_preheat_at(nx, ny)
+                            self.heat_map.set_preheat_at(
+                                nx, ny, min(current_preheat + preheat, 1.0)
+                            )
+
+    def _update_perimeter(self) -> None:
+        """Update fire perimeter tracking."""
+        self.perimeter.points.clear()
+
+        for fire in self.fires:
+            if fire.is_spreading:
+                self.perimeter.add_point(fire.position[0], fire.position[1])
+
+        self.perimeter.compute_metrics()
+
     def update(self, fuel_map: dict[tuple[float, float], FuelProperties]) -> None:
-        """Update fire propagation."""
+        """Update fire propagation with advanced physics."""
+        self._update_heat_diffusion(fuel_map)
+        self._update_pyrolysis(fuel_map)
+        self._update_crown_fire(fuel_map)
+        self._update_spotting(fuel_map)
+        self._update_containment(fuel_map)
+
         new_fires: list[FireState] = []
 
         for fire in self.fires:
             if not fire.is_spreading:
                 continue
 
-            fuel = fuel_map.get(
-                (int(fire.position[0]), int(fire.position[1])),
-                FuelProperties(FuelModel.GRASS, 0.5, 0.3),
-            )
+            fuel_key = (int(fire.position[0]), int(fire.position[1]))
+            fuel = fuel_map.get(fuel_key, FuelProperties(FuelModel.GRASS, 0.5, 0.3))
+
+            if self.heat_map is not None:
+                gx = int(fire.position[0] / 10)
+                gy = int(fire.position[1] / 10)
+                preheat = self.heat_map.get_preheat_at(gx, gy)
+
+                if preheat > 0.2:
+                    fuel = FuelProperties(
+                        fuel_model=fuel.fuel_model,
+                        fuel_load=fuel.fuel_load,
+                        fuel_depth=fuel.fuel_depth,
+                        moisture_content=fuel.moisture_content * (1 - preheat * 0.5),
+                        bulk_density=fuel.bulk_density,
+                        surface_area_ratio=fuel.surface_area_ratio,
+                        mineral_content=fuel.mineral_content,
+                        effective_heating_number=fuel.effective_heating_number,
+                        particle_density=fuel.particle_density,
+                        heat_diffusion_coefficient=fuel.heat_diffusion_coefficient,
+                        canopy_base_height=fuel.canopy_base_height,
+                        canopy_fuel_load=fuel.canopy_fuel_load,
+                    )
 
             ros = self.dynamics.compute_rate_of_spread(fuel, fire.spread_direction)
             fire.rate_of_spread = ros
@@ -282,19 +737,45 @@ class FireModel:
                 self.dynamics.weather.wind_speed
             )
 
-            if ros > 0.01:
-                spread_dist = ros * self.dt
+            if fire.is_crown_fire:
+                fire.temperature = 1000.0
+            else:
+                fire.temperature = 500.0 + intensity * 0.5
+
+            containment_reduction = 1.0
+            for line in self.containment_lines:
+                for line_point in line:
+                    containment_reduction *= (
+                        1.0
+                        - self.dynamics.compute_containment_effectiveness(
+                            line_point, fire.position
+                        )
+                        * 0.5
+                    )
+
+            effective_ros = ros * containment_reduction
+
+            if effective_ros > 0.01:
+                spread_dist = effective_ros * self.dt
+
+                angle_variation = np.random.uniform(-0.1, 0.1)
+                new_direction = fire.spread_direction + angle_variation
+
                 fire.position = (
-                    fire.position[0] + spread_dist * np.cos(fire.spread_direction),
-                    fire.position[1] + spread_dist * np.sin(fire.spread_direction),
+                    fire.position[0] + spread_dist * np.cos(new_direction),
+                    fire.position[1] + spread_dist * np.sin(new_direction),
                 )
+                fire.spread_direction = new_direction
                 new_fires.append(fire)
             else:
                 fire.is_spreading = False
 
-            fire.fuel_consumed = min(1.0, fire.fuel_consumed + ros * self.dt / 10.0)
+            fire.fuel_consumed = min(
+                1.0, fire.fuel_consumed + effective_ros * self.dt / 10.0
+            )
 
         self.fires.extend(new_fires)
+        self._update_perimeter()
         self.time += self.dt
 
     def get_intensity_at(self, point: tuple[float, float]) -> float:
@@ -329,6 +810,24 @@ class FireModel:
                 return fire.flame_length * (1 - dist / 20)
         return 0.0
 
+    def get_temperature_at(self, point: tuple[float, float]) -> float:
+        """Get temperature at a point from heat map."""
+        if self.heat_map is None:
+            return 300.0
+
+        gx = int(point[0] / 10)
+        gy = int(point[1] / 10)
+        return self.heat_map.get_temp_at(gx, gy)
+
+    def get_preheat_at(self, point: tuple[float, float]) -> float:
+        """Get pre-heat level at a point."""
+        if self.heat_map is None:
+            return 0.0
+
+        gx = int(point[0] / 10)
+        gy = int(point[1] / 10)
+        return self.heat_map.get_preheat_at(gx, gy)
+
     def get_fire_distance(
         self, point: tuple[float, float]
     ) -> tuple[float, tuple[float, float] | None]:
@@ -352,6 +851,22 @@ class FireModel:
                 nearest_fire = fire.position
 
         return min_dist, nearest_fire
+
+    def get_fire_area(self) -> float:
+        """Get total fire area from perimeter."""
+        return self.perimeter.area
+
+    def get_fire_perimeter_length(self) -> float:
+        """Get fire perimeter length."""
+        return self.perimeter.perimeter
+
+    def is_point_in_fire(self, point: tuple[float, float]) -> bool:
+        """Check if point is inside fire perimeter."""
+        return self.perimeter.is_point_inside(point[0], point[1])
+
+    def get_active_ember_count(self) -> int:
+        """Get number of active embers."""
+        return len(self.embers)
 
 
 def create_default_fire_model(

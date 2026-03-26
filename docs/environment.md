@@ -176,12 +176,87 @@ An episode ends when:
 
 ## Fire Dynamics
 
-FireEnv includes a fire dynamics model based on the Rothermel model for realistic fire propagation:
+FireEnv includes a fire dynamics model based on the Rothermel model for realistic fire propagation, with advanced physics features:
+
+### Core Rothermel Model
 
 - Fire spreads based on wind speed and direction
 - Terrain affects fuel properties
 - Fire intensity and flame length calculated per position
 - Agents take damage from fire, smoke, and heat
+
+### Advanced Fire Physics
+
+#### Heat Transfer & Thermal Diffusion
+- `HeatMap` tracks cell temperatures across the grid
+- Heat diffuses to adjacent cells using a diffusion coefficient
+- Pre-heating zones form ahead of fire front (pyrolysis modeling)
+- Terrain-specific diffusion rates (e.g., forest: 0.005, urban: 0.03)
+
+#### Fire Spotting / Ember Transport
+- Probabilistic ember generation based on fire intensity and wind
+- `spotting_probability = fire_intensity * wind_speed * 0.0001`
+- Embers travel up to `2.5 * wind_speed` meters
+- New fire ignitions can start from ember landing
+
+#### Crown Fire Dynamics
+- Canopy properties added to terrain (base height, fuel load)
+- Crown fire transition when:
+  - Surface fire intensity > 300 kW/m
+  - Canopy base height < 6m
+  - Canopy bulk density > 0.1 kg/m³
+- Crown fire spreads 1.5-2.0x faster than surface fire
+
+#### Fire Perimeter Evolution
+- `FirePerimeter` tracks fire as polygon
+- Computes area and perimeter for accurate ROS calculations
+- Point-in-polygon checks for containment
+
+#### Containment Lines
+- Fire lines reduce spread probability based on distance
+- Effectiveness: up to 95% when fire is directly on line
+- Progressive containment reduces ROS multiplicatively
+
+### FireState Properties
+
+```python
+from emmarl.envs.fire_dynamics import FireState
+
+fire_state = FireState(
+    position=(100.0, 200.0),
+    intensity=0.8,
+    rate_of_spread=5.0,
+    fire_line_intensity=400.0,  # kW/m
+    flame_length=2.5,  # meters
+    temperature=800.0,  # Kelvin
+    pre_heating=0.5,  # pre-heat factor
+    is_crown_fire=False,
+    ember_count=3,
+)
+```
+
+### Accessing Fire Properties
+
+```python
+# Get fire intensity at a point
+intensity = fire_model.get_intensity_at((x, y))
+
+# Get fire area and perimeter
+area = fire_model.get_fire_area()
+perimeter = fire_model.get_fire_perimeter_length()
+
+# Check if point is inside fire
+is_burning = fire_model.is_point_in_fire((x, y))
+
+# Get temperature at a point
+temp = fire_model.get_temperature_at((x, y))
+
+# Get pre-heat level
+preheat = fire_model.get_preheat_at((x, y))
+
+# Active ember count
+ember_count = fire_model.get_active_ember_count()
+```
 
 Enable/disable with `enable_fire_dynamics` config option.
 

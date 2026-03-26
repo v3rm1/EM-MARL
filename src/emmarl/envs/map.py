@@ -38,41 +38,51 @@ TERRAIN_PROPERTIES = {
         "speed_multiplier": 1.0,
         "fuel_load": 0.1,
         "fire_resistance": 0.9,
+        "heat_diffusion_coefficient": 0.01,
     },
     TerrainType.FOREST: {
         "speed_multiplier": 0.6,
         "fuel_load": 0.9,
         "fire_resistance": 0.1,
+        "heat_diffusion_coefficient": 0.005,
+        "canopy_base_height": 3.0,
+        "canopy_fuel_load": 0.8,
     },
     TerrainType.GRASS: {
         "speed_multiplier": 0.8,
         "fuel_load": 0.6,
         "fire_resistance": 0.3,
+        "heat_diffusion_coefficient": 0.02,
     },
     TerrainType.URBAN: {
         "speed_multiplier": 0.9,
         "fuel_load": 0.4,
         "fire_resistance": 0.5,
+        "heat_diffusion_coefficient": 0.03,
     },
     TerrainType.ROAD: {
         "speed_multiplier": 1.2,
         "fuel_load": 0.0,
         "fire_resistance": 1.0,
+        "heat_diffusion_coefficient": 0.05,
     },
     TerrainType.WATER: {
         "speed_multiplier": 0.0,
         "fuel_load": 0.0,
         "fire_resistance": 1.0,
+        "heat_diffusion_coefficient": 0.1,
     },
     TerrainType.BUILDING: {
         "speed_multiplier": 0.5,
         "fuel_load": 0.5,
         "fire_resistance": 0.6,
+        "heat_diffusion_coefficient": 0.02,
     },
     TerrainType.BURNED: {
         "speed_multiplier": 0.7,
         "fuel_load": 0.0,
         "fire_resistance": 1.0,
+        "heat_diffusion_coefficient": 0.08,
     },
 }
 
@@ -157,6 +167,29 @@ class GridTerrain:
         return TERRAIN_PROPERTIES.get(
             terrain_type, TERRAIN_PROPERTIES[TerrainType.OPEN]
         )
+
+    def get_fuel_properties(self, world_x: float, world_y: float) -> dict:
+        """Get fuel properties including heat diffusion and canopy."""
+        terrain = self.get_terrain_at(world_x, world_y)
+        return self.get_terrain_properties(terrain)
+
+    def get_canopy_height(self, world_x: float, world_y: float) -> float:
+        """Get canopy base height at position."""
+        terrain = self.get_terrain_at(world_x, world_y)
+        props = self.get_terrain_properties(terrain)
+        return props.get("canopy_base_height", 0.0)
+
+    def get_canopy_fuel(self, world_x: float, world_y: float) -> float:
+        """Get canopy fuel load at position."""
+        terrain = self.get_terrain_at(world_x, world_y)
+        props = self.get_terrain_properties(terrain)
+        return props.get("canopy_fuel_load", 0.0)
+
+    def get_heat_diffusion(self, world_x: float, world_y: float) -> float:
+        """Get heat diffusion coefficient at position."""
+        terrain = self.get_terrain_at(world_x, world_y)
+        props = self.get_terrain_properties(terrain)
+        return props.get("heat_diffusion_coefficient", 0.01)
 
     def get_speed_multiplier(self, world_x: float, world_y: float) -> float:
         """Get movement speed multiplier at position."""

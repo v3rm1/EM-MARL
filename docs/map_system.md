@@ -46,18 +46,18 @@ BURNED        # Burned area (0.7x)
 
 ### Terrain Properties
 
-Each terrain type affects movement speed and fire behavior:
+Each terrain type affects movement speed, fire behavior, and heat diffusion:
 
-| Terrain   | Speed Multiplier | Fuel Load | Fire Resistance |
-|-----------|-----------------|-----------|-----------------|
-| OPEN      | 1.0             | 0.1       | 0.9             |
-| FOREST    | 0.6             | 0.9       | 0.1             |
-| GRASS     | 0.8             | 0.6       | 0.3             |
-| URBAN     | 0.9             | 0.4       | 0.5             |
-| ROAD      | 1.2             | 0.0       | 1.0             |
-| WATER     | 0.0 (impassable)| 0.0       | 1.0             |
-| BUILDING  | 0.5             | 0.5       | 0.6             |
-| BURNED    | 0.7             | 0.0       | 1.0             |
+| Terrain   | Speed Multiplier | Fuel Load | Fire Resistance | Heat Diffusion | Canopy |
+|-----------|-----------------|-----------|-----------------|----------------|--------|
+| OPEN      | 1.0             | 0.1       | 0.9             | 0.01           | -      |
+| FOREST    | 0.6             | 0.9       | 0.1             | 0.005          | 3.0m   |
+| GRASS     | 0.8             | 0.6       | 0.3             | 0.02           | -      |
+| URBAN     | 0.9             | 0.4       | 0.5             | 0.03           | -      |
+| ROAD      | 1.2             | 0.0       | 1.0             | 0.05           | -      |
+| WATER     | 0.0 (impassable)| 0.0       | 1.0             | 0.10           | -      |
+| BUILDING  | 0.5             | 0.5       | 0.6             | 0.02           | -      |
+| BURNED    | 0.7             | 0.0       | 1.0             | 0.08           | -      |
 
 ### Querying Terrain
 
@@ -73,6 +73,13 @@ fuel = emergency_map.get_fuel_load((300.0, 300.0))
 
 # Check if position is passable
 can_pass = emergency_map.is_passable((300.0, 300.0))
+
+# Get heat diffusion coefficient
+heat_diff = emergency_map.terrain.get_heat_diffusion(300.0, 300.0)
+
+# Get canopy properties (for crown fire)
+canopy_height = emergency_map.terrain.get_canopy_height(300.0, 300.0)
+canopy_fuel = emergency_map.terrain.get_canopy_fuel(300.0, 300.0)
 ```
 
 ## GridTerrain Class

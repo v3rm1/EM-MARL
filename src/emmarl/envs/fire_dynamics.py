@@ -285,6 +285,84 @@ class FireDynamics:
     AIR_DENSITY: float = 1.2
     HEAT_OF_PYROLYSIS: float = 2500000.0
 
+    _atmospheric: AtmosphericConditions | None = None
+    _diurnal_cycle: DiurnalCycle | None = None
+    _terrain_microclimate: TerrainMicroclimate | None = None
+    _fuel_moisture: FuelMoisture | None = None
+
+    def set_atmospheric_conditions(self, atmospheric: AtmosphericConditions) -> None:
+        """Set atmospheric conditions."""
+        self._atmospheric = atmospheric
+
+    def set_diurnal_cycle(self, cycle: DiurnalCycle) -> None:
+        """Set diurnal cycle."""
+        self._diurnal_cycle = cycle
+
+    def set_terrain_microclimate(
+        self, elevation: float, slope_angle: float, slope_aspect: float
+    ) -> None:
+        """Set terrain microclimate."""
+        self._terrain_microclimate = TerrainMicroclimate(
+            elevation=elevation,
+            slope_angle=slope_angle,
+            slope_aspect=slope_aspect,
+        )
+
+    def set_fuel_moisture(self, fuel_moisture: FuelMoisture) -> None:
+        """Set fuel moisture."""
+        self._fuel_moisture = fuel_moisture
+
+    def compute_atmospheric_factor(self) -> float:
+        """Compute atmospheric impact factor (0-2).
+
+        Returns:
+            Factor where >1 increases fire spread
+        """
+        if self._atmospheric:
+            return self._atmospheric.compute_fire_impact_factor()
+
+        if self._diurnal_cycle:
+            conditions = self._diurnal_cycle.get_atmospheric_conditions()
+            return conditions.compute_fire_impact_factor()
+
+        return 1.0
+
+    def compute_moisture_factor(self) -> float:
+        """Compute moisture impact factor.
+
+        Returns:
+            Factor where higher moisture reduces fire (0-1)
+        """
+        if self._fuel_moisture:
+            moisture = self._fuel_moisture.effective_moisture
+            return max(0.1, 1.0 - moisture * 2.0)
+
+        if self._atmospheric:
+            moisture = self._atmospheric.compute_moisture_content()
+            return max(0.1, 1.0 - moisture * 2.0)
+
+        return 1.0
+
+    def compute_microclimate_factor(self) -> float:
+        """Compute terrain microclimate impact factor.
+
+        Returns:
+            Factor for slope/aspect/canyon effects
+        """
+        if not self._terrain_microclimate:
+            return 1.0
+
+        aspect = self._terrain_microclimate.compute_aspect_factor()
+        slope = self._terrain_microclimate.compute_slope_effect()
+
+        wind_channeling = 1.0
+        if self._terrain_microclimate and self._diurnal_cycle:
+            wind_channeling = self._terrain_microclimate.compute_canyon_channeling(
+                self.weather.wind_speed, self.weather.wind_direction
+            )
+
+        return aspect * slope * wind_channeling
+
     def compute_reaction_intensity(self, fuel: FuelProperties) -> float:
         """Compute reaction intensity (kW/m²)."""
         particle_density = fuel.particle_density
@@ -332,7 +410,17 @@ class FireDynamics:
         wind_factor = self.compute_wind_factor(fuel)
         slope_factor = self.compute_slope_factor(fuel)
 
-        effective_intensity = reaction_intensity * (1 + wind_factor + slope_factor - 1)
+        atmospheric_factor = self.compute_atmospheric_factor()
+        moisture_factor = self.compute_moisture_factor()
+        microclimate_factor = self.compute_microclimate_factor()
+
+        effective_intensity = (
+            reaction_intensity
+            * (1 + wind_factor + slope_factor - 1)
+            * atmospheric_factor
+            * moisture_factor
+            * microclimate_factor
+        )
 
         if effective_intensity <= 0:
             return 0.0
@@ -513,9 +601,68 @@ class FireModel:
     grid_width: int = 100
     grid_height: int = 100
 
+    diurnal_cycle: DiurnalCycle | None = None
+    fuel_moisture: FuelMoisture | None = None
+    fuel_consumption: dict[tuple[int, int], FuelConsumption] = field(
+        default_factory=dict
+    )
+
     def __post_init__(self) -> None:
         if self.heat_map is None:
             self.heat_map = HeatMap(width=self.grid_width, height=self.grid_height)
+
+    def set_diurnal_cycle(
+        self,
+        day_temp: float = 30.0,
+        night_temp: float = 15.0,
+        day_humidity: float = 0.3,
+        night_humidity: float = 0.7,
+    ) -> None:
+        """Initialize diurnal cycle."""
+        self.diurnal_cycle = DiurnalCycle(
+            day_temp=day_temp,
+            night_temp=night_temp,
+            day_humidity=day_humidity,
+            night_humidity=night_humidity,
+        )
+        self.dynamics.set_diurnal_cycle(self.diurnal_cycle)
+
+    def set_fuel_moisture(self, fuel_type: str = "grass") -> None:
+        """Initialize fuel moisture model."""
+        self.fuel_moisture = FuelMoisture(fuel_type=fuel_type)
+        self.dynamics.set_fuel_moisture(self.fuel_moisture)
+
+    def _update_environmental_conditions(self) -> None:
+        """Update environmental conditions from diurnal cycle."""
+        if self.diurnal_cycle:
+            hours_elapsed = self.dt / 3600.0
+            self.diurnal_cycle.update(hours_elapsed)
+
+            if self.fuel_moisture:
+                conditions = self.diurnal_cycle.get_atmospheric_conditions()
+                self.fuel_moisture.update(
+                    temperature=conditions.temperature,
+                    humidity=conditions.relative_humidity,
+                    dt=hours_elapsed,
+                )
+
+    def get_fire_danger_rating(self) -> float:
+        """Get current fire danger rating (0-1)."""
+        if self.diurnal_cycle:
+            return self.diurnal_cycle.get_fire_danger_rating()
+        return 0.5
+
+    def get_current_temperature(self) -> float:
+        """Get current ambient temperature."""
+        if self.diurnal_cycle:
+            return self.diurnal_cycle.get_temperature()
+        return 25.0
+
+    def get_current_humidity(self) -> float:
+        """Get current relative humidity."""
+        if self.diurnal_cycle:
+            return self.diurnal_cycle.get_humidity()
+        return 0.4
 
     def add_ignition(
         self, position: tuple[float, float], intensity: float = 1.0
@@ -689,6 +836,7 @@ class FireModel:
 
     def update(self, fuel_map: dict[tuple[float, float], FuelProperties]) -> None:
         """Update fire propagation with advanced physics."""
+        self._update_environmental_conditions()
         self._update_heat_diffusion(fuel_map)
         self._update_pyrolysis(fuel_map)
         self._update_crown_fire(fuel_map)
@@ -1287,3 +1435,510 @@ class SuppressionLinePhysics:
             return 1.0 - (min_dist / line_width)
 
         return 0.0
+
+
+@dataclass
+class AtmosphericConditions:
+    """Atmospheric conditions affecting fire behavior.
+
+    Models temperature and humidity effects on fire spread:
+    - Higher temperature increases fire intensity
+    - Higher humidity reduces fire spread
+    - moisture_content = relative_humidity * exp(-temperature / 20)
+    """
+
+    temperature: float = 25.0
+    relative_humidity: float = 0.4
+    pressure: float = 101.325
+
+    def compute_moisture_content(self) -> float:
+        """Compute fuel moisture content from temperature and humidity.
+
+        Returns:
+            Fuel moisture content (0-1)
+        """
+        return self.relative_humidity * np.exp(-self.temperature / 20.0)
+
+    def compute_fire_impact_factor(self) -> float:
+        """Compute atmospheric impact on fire behavior (0-2).
+
+        Returns:
+            Impact factor where >1 increases fire, <1 decreases
+        """
+        temp_factor = 1.0 + (self.temperature - 20.0) / 30.0
+        humidity_factor = 1.0 + (0.5 - self.relative_humidity) * 0.8
+
+        return max(0.3, min(temp_factor * humidity_factor, 2.0))
+
+    def update_conditions(
+        self, temperature: float, humidity: float, pressure: float | None = None
+    ) -> None:
+        """Update atmospheric conditions.
+
+        Args:
+            temperature: New temperature (Celsius)
+            relative_humidity: New relative humidity (0-1)
+            pressure: Optional new pressure (kPa)
+        """
+        self.temperature = temperature
+        self.relative_humidity = np.clip(humidity, 0.0, 1.0)
+        if pressure is not None:
+            self.pressure = pressure
+
+
+class DiurnalCycle:
+    """Diurnal cycle for day/night temperature and humidity changes.
+
+    Models 24-hour cycle affecting fire behavior:
+    - Hot/dry afternoons (peak fire danger)
+    - Cool/humid nights (low fire danger)
+    - Dawn/dusk transitions
+    """
+
+    DEFAULT_DAY_TEMP: float = 30.0
+    DEFAULT_NIGHT_TEMP: float = 15.0
+    DEFAULT_DAY_HUMIDITY: float = 0.3
+    DEFAULT_NIGHT_HUMIDITY: float = 0.7
+
+    def __init__(
+        self,
+        day_temp: float = 30.0,
+        night_temp: float = 15.0,
+        day_humidity: float = 0.3,
+        night_humidity: float = 0.7,
+        cycle_duration: float = 24.0,
+    ) -> None:
+        """Initialize diurnal cycle.
+
+        Args:
+            day_temp: Peak daytime temperature (Celsius)
+            night_temp: Minimum nighttime temperature (Celsius)
+            day_humidity: Minimum daytime humidity (0-1)
+            night_humidity: Maximum nighttime humidity (0-1)
+            cycle_duration: Duration of full cycle (hours)
+        """
+        self.day_temp = day_temp
+        self.night_temp = night_temp
+        self.day_humidity = day_humidity
+        self.night_humidity = night_humidity
+        self.cycle_duration = cycle_duration
+        self._current_time: float = 6.0
+
+    @property
+    def current_time(self) -> float:
+        """Get current time of day (hours)."""
+        return self._current_time
+
+    @current_time.setter
+    def current_time(self, value: float) -> None:
+        """Set current time of day (0-24 hours)."""
+        self._current_time = value % 24.0
+
+    def get_temperature(self, time: float | None = None) -> float:
+        """Get temperature at given time.
+
+        Args:
+            time: Time of day (hours), uses current_time if None
+
+        Returns:
+            Temperature (Celsius)
+        """
+        t = time if time is not None else self._current_time
+
+        if t < 6:
+            temp = self.night_temp
+        elif t < 12:
+            progress = (t - 6) / 6
+            temp = self.night_temp + (self.day_temp - self.night_temp) * np.sin(
+                progress * np.pi / 2
+            )
+        elif t < 18:
+            temp = self.day_temp
+        elif t < 24:
+            progress = (t - 18) / 6
+            temp = self.day_temp - (self.day_temp - self.night_temp) * np.sin(
+                progress * np.pi / 2
+            )
+        else:
+            temp = self.night_temp
+
+        return temp
+
+    def get_humidity(self, time: float | None = None) -> float:
+        """Get relative humidity at given time.
+
+        Args:
+            time: Time of day (hours), uses current_time if None
+
+        Returns:
+            Relative humidity (0-1)
+        """
+        t = time if time is not None else self._current_time
+
+        if t < 6:
+            humidity = self.night_humidity
+        elif t < 12:
+            progress = (t - 6) / 6
+            humidity = self.night_humidity - (
+                self.night_humidity - self.day_humidity
+            ) * np.sin(progress * np.pi / 2)
+        elif t < 18:
+            humidity = self.day_humidity
+        elif t < 24:
+            progress = (t - 18) / 6
+            humidity = self.day_humidity + (
+                self.night_humidity - self.day_humidity
+            ) * np.sin(progress * np.pi / 2)
+        else:
+            humidity = self.night_humidity
+
+        return np.clip(humidity, 0.0, 1.0)
+
+    def get_fire_danger_rating(self, time: float | None = None) -> float:
+        """Get fire danger rating based on time of day (0-1).
+
+        Args:
+            time: Time of day (hours), uses current_time if None
+
+        Returns:
+            Fire danger rating
+        """
+        temp = self.get_temperature(time)
+        humidity = self.get_humidity(time)
+
+        temp_factor = (temp - 10) / 30
+        humidity_factor = 1.0 - humidity
+
+        danger = temp_factor * 0.6 + humidity_factor * 0.4
+        return np.clip(danger, 0.0, 1.0)
+
+    def update(self, dt: float) -> None:
+        """Update diurnal cycle time.
+
+        Args:
+            dt: Time step (hours)
+        """
+        self._current_time = (self._current_time + dt) % 24.0
+
+    def get_atmospheric_conditions(
+        self, time: float | None = None
+    ) -> AtmosphericConditions:
+        """Get AtmosphericConditions for given time.
+
+        Args:
+            time: Time of day (hours), uses current_time if None
+
+        Returns:
+            AtmosphericConditions object
+        """
+        return AtmosphericConditions(
+            temperature=self.get_temperature(time),
+            relative_humidity=self.get_humidity(time),
+        )
+
+
+@dataclass
+class TerrainMicroclimate:
+    """Terrain microclimate effects on fire behavior.
+
+    Models:
+    - Slope aspect effects (south-facing burns faster)
+    - Canyon/wind channeling effects
+    - Elevation effects on temperature/humidity
+    """
+
+    elevation: float = 0.0
+    slope_angle: float = 0.0
+    slope_aspect: float = 0.0
+
+    LAPSE_RATE: float = 6.5
+    CANYON_WIDTH: float = 100.0
+
+    def compute_aspect_factor(self) -> float:
+        """Compute fire spread factor based on slope aspect.
+
+        South-facing slopes (aspect 180) burn faster.
+        North-facing (aspect 0) burn slower.
+
+        Returns:
+            Aspect factor (0.5 - 1.5)
+        """
+        aspect_rad = np.radians(self.slope_aspect)
+        return 0.75 + 0.75 * np.cos(aspect_rad - np.pi)
+
+    def compute_slope_effect(self) -> float:
+        """Compute combined slope effect on fire.
+
+        Returns:
+            Slope effect factor
+        """
+        if self.slope_angle <= 0:
+            return 1.0
+
+        slope_rad = np.radians(self.slope_angle)
+        return np.exp(3.54 * slope_rad / (1 + slope_rad))
+
+    def compute_canyon_channeling(
+        self, wind_speed: float, wind_direction: float
+    ) -> float:
+        """Compute wind channeling effect in canyons.
+
+        Args:
+            wind_speed: Free stream wind speed (m/s)
+            wind_direction: Wind direction (degrees)
+
+        Returns:
+            Channeling factor (>1 = acceleration, <1 = deceleration)
+        """
+        if self.slope_angle < 5:
+            return 1.0
+
+        aspect_rad = np.radians(self.slope_aspect)
+        wind_rad = np.radians(wind_direction)
+
+        alignment = np.cos(aspect_rad - wind_rad)
+
+        if alignment > 0:
+            channeling = 1.0 + alignment * self.slope_angle / 20.0
+            return min(channeling, 3.0)
+
+        return 1.0 / (1.0 - alignment * 0.5)
+
+    def compute_elevation_effect(self) -> tuple[float, float]:
+        """Compute temperature and humidity adjustments for elevation.
+
+        Returns:
+            Tuple of (temperature_adjustment, humidity_adjustment)
+        """
+        temp_adjust = -self.elevation / 1000.0 * self.LAPSE_RATE
+        humidity_adjust = self.elevation / 1000.0 * 0.05
+
+        return temp_adjust, humidity_adjust
+
+    def get_local_conditions(
+        self, ambient_temp: float, ambient_humidity: float
+    ) -> tuple[float, float]:
+        """Get local temperature and humidity accounting for terrain.
+
+        Args:
+            ambient_temp: Ambient temperature (Celsius)
+            ambient_humidity: Ambient relative humidity (0-1)
+
+        Returns:
+            Tuple of (local_temp, local_humidity)
+        """
+        elev_temp, elev_humidity = self.compute_elevation_effect()
+
+        local_temp = ambient_temp + elev_temp
+        local_humidity = np.clip(ambient_humidity + elev_humidity, 0.0, 1.0)
+
+        return local_temp, local_humidity
+
+
+class FuelMoisture:
+    """Fuel moisture modeling by species type and diurnal cycles.
+
+    Models:
+    - Dead fuel moisture (responds quickly to weather)
+    - Live fuel moisture (responds slowly)
+    - Species-specific moisture characteristics
+    """
+
+    DEAD_FUEL_TIME_CONSTANT: float = 3.0
+    LIVE_FUEL_TIME_CONSTANT: float = 168.0
+
+    def __init__(self, fuel_type: str = "grass") -> None:
+        """Initialize fuel moisture.
+
+        Args:
+            fuel_type: Type of fuel ("grass", "shrub", "timber", "litter")
+        """
+        self.fuel_type = fuel_type
+        self._dead_moisture: float = 0.1
+        self._live_moisture: float = 0.5
+
+        self._set_species_defaults()
+
+    def _set_species_defaults(self) -> None:
+        """Set default moisture values by fuel type."""
+        defaults = {
+            "grass": (0.08, 1.0),
+            "shrub": (0.10, 0.8),
+            "timber": (0.15, 0.6),
+            "litter": (0.12, 0.5),
+            "chaparral": (0.08, 0.6),
+            "boreal": (0.12, 0.7),
+        }
+        dead, live = defaults.get(self.fuel_type, (0.1, 0.5))
+        self._dead_moisture = dead
+        self._live_moisture = live
+
+    @property
+    def dead_moisture(self) -> float:
+        """Get dead fuel moisture content."""
+        return self._dead_moisture
+
+    @property
+    def live_moisture(self) -> float:
+        """Get live fuel moisture content."""
+        return self._live_moisture
+
+    @property
+    def effective_moisture(self) -> float:
+        """Get effective moisture content (weighted by typical composition)."""
+        return 0.7 * self._dead_moisture + 0.3 * self._live_moisture
+
+    def update(
+        self,
+        temperature: float,
+        humidity: float,
+        precipitation: float = 0.0,
+        dt: float = 1.0,
+    ) -> None:
+        """Update fuel moisture based on conditions.
+
+        Args:
+            temperature: Temperature (Celsius)
+            humidity: Relative humidity (0-1)
+            precipitation: Precipitation amount (mm)
+            dt: Time step (hours)
+        """
+        equilibrium_moisture = humidity * np.exp(-temperature / 20.0)
+
+        if precipitation > 0.1:
+            self._dead_moisture = min(1.0, self._dead_moisture + precipitation * 0.1)
+            self._live_moisture = min(1.0, self._live_moisture + precipitation * 0.05)
+        else:
+            dead_rate = dt / self.DEAD_FUEL_TIME_CONSTANT
+            self._dead_moisture += dead_rate * (
+                equilibrium_moisture - self._dead_moisture
+            )
+
+            live_rate = dt / self.LIVE_FUEL_TIME_CONSTANT
+            self._live_moisture += live_rate * (
+                equilibrium_moisture * 1.5 - self._live_moisture
+            )
+
+        self._dead_moisture = np.clip(self._dead_moisture, 0.01, 1.0)
+        self._live_moisture = np.clip(self._live_moisture, 0.01, 2.0)
+
+    def compute_ignition_delay(self, temperature: float) -> float:
+        """Compute ignition delay based on fuel moisture.
+
+        Args:
+            temperature: Ambient temperature (Celsius)
+
+        Returns:
+            Ignition delay (seconds)
+        """
+        effective = self.effective_moisture
+
+        base_delay = 60.0 * (1.0 + 10.0 * effective)
+
+        if temperature > 300:
+            temp_factor = 300.0 / temperature
+            base_delay *= temp_factor
+
+        return max(10.0, base_delay)
+
+    def get_moisture_content(self) -> float:
+        """Get moisture content for fire calculations."""
+        return self.effective_moisture
+
+
+@dataclass
+class FuelConsumption:
+    """Fuel consumption modeling with smoldering phase.
+
+    Models:
+    - Consumption rate based on fire intensity
+    - Smoldering phase with reduced spread but continued damage
+    - Transition between flaming and smoldering
+    """
+
+    FLAMING_PHASE: str = "flaming"
+    SMOLDERING_PHASE: str = "smoldering"
+    TRANSITION_PHASE: str = "transition"
+
+    def __init__(self) -> None:
+        """Initialize fuel consumption model."""
+        self.phase: str = self.FLAMING_PHASE
+        self.consumed_amount: float = 0.0
+        self.smolder_intensity: float = 0.0
+
+    @property
+    def current_phase(self) -> str:
+        """Get current combustion phase."""
+        return self.phase
+
+    @property
+    def is_smoldering(self) -> bool:
+        """Check if fire is in smoldering phase."""
+        return self.phase in (self.SMOLDERING_PHASE, self.TRANSITION_PHASE)
+
+    def update(
+        self,
+        fire_intensity: float,
+        fuel_available: float,
+        dt: float = 1.0,
+    ) -> tuple[float, float, str]:
+        """Update fuel consumption.
+
+        Args:
+            fire_intensity: Fire intensity (kW/m)
+            fuel_available: Available fuel (kg/m²)
+            dt: Time step (seconds)
+
+        Returns:
+            Tuple of (consumption_rate, damage_rate, phase)
+        """
+        if fuel_available <= 0:
+            self.phase = self.SMOLDERING_PHASE
+            return 0.0, 0.0, self.phase
+
+        if self.phase == self.FLAMING_PHASE:
+            if fire_intensity < 50:
+                self.phase = self.TRANSITION_PHASE
+
+        if self.phase == self.TRANSITION_PHASE:
+            if self.consumed_amount / (fuel_available + 0.01) > 0.7:
+                self.phase = self.SMOLDERING_PHASE
+
+        if self.phase == self.SMOLDERING_PHASE:
+            self.smolder_intensity = min(1.0, self.smolder_intensity + dt * 0.01)
+        else:
+            self.smolder_intensity = max(0.0, self.smolder_intensity - dt * 0.05)
+
+        if self.phase == self.FLAMING_PHASE:
+            consumption_rate = min(fuel_available, fire_intensity * 0.01 * dt)
+            damage_rate = fire_intensity * 0.1
+        elif self.phase == self.TRANSITION_PHASE:
+            factor = 1.0 - self.smolder_intensity
+            consumption_rate = min(fuel_available, fire_intensity * 0.005 * dt * factor)
+            damage_rate = fire_intensity * 0.05 * (1 + self.smolder_intensity)
+        else:
+            consumption_rate = min(fuel_available, fuel_available * 0.01 * dt)
+            damage_rate = 20.0 * (1 + self.smolder_intensity)
+
+        self.consumed_amount += consumption_rate
+
+        return consumption_rate, damage_rate, self.phase
+
+    def compute_spread_rate_modifier(self) -> float:
+        """Compute spread rate modifier based on phase.
+
+        Returns:
+            Modifier (0-1)
+        """
+        if self.phase == self.FLAMING_PHASE:
+            return 1.0
+        elif self.phase == self.TRANSITION_PHASE:
+            return 0.5 - self.smolder_intensity * 0.3
+        else:
+            return 0.1
+
+    def reset(self) -> None:
+        """Reset consumption state."""
+        self.phase = self.FLAMING_PHASE
+        self.consumed_amount = 0.0
+        self.smolder_intensity = 0.0

@@ -11,6 +11,13 @@ from emmarl.envs.fire_dynamics import (
     FoamPhysics,
     AerialSuppressionPhysics,
     SuppressionLinePhysics,
+    AtmosphericConditions,
+    DiurnalCycle,
+    TerrainMicroclimate,
+    FuelMoisture,
+    FuelConsumption,
+    FireModel,
+    FireDynamics,
 )
 
 
@@ -578,3 +585,251 @@ class TestFireEnvSuppression:
                 resource_type="foam",
             )
             assert bool(result) is not None
+
+
+class TestAtmosphericConditions:
+    """Tests for AtmosphericConditions."""
+
+    def test_moisture_content_calculation(self):
+        conditions = AtmosphericConditions(temperature=25.0, relative_humidity=0.4)
+        moisture = conditions.compute_moisture_content()
+        assert 0.0 < moisture < 1.0
+
+    def test_fire_impact_factor_high_temp_low_humidity(self):
+        conditions = AtmosphericConditions(temperature=35.0, relative_humidity=0.2)
+        factor = conditions.compute_fire_impact_factor()
+        assert factor > 1.0
+
+    def test_fire_impact_factor_low_temp_high_humidity(self):
+        conditions = AtmosphericConditions(temperature=10.0, relative_humidity=0.8)
+        factor = conditions.compute_fire_impact_factor()
+        assert factor < 1.0
+
+    def test_update_conditions(self):
+        conditions = AtmosphericConditions()
+        conditions.update_conditions(temperature=30.0, humidity=0.3)
+        assert conditions.temperature == 30.0
+        assert conditions.relative_humidity == 0.3
+
+
+class TestDiurnalCycle:
+    """Tests for DiurnalCycle."""
+
+    def test_diurnal_cycle_initialization(self):
+        cycle = DiurnalCycle()
+        assert cycle.current_time == 6.0
+
+    def test_daytime_temperature(self):
+        cycle = DiurnalCycle(day_temp=30.0, night_temp=15.0)
+        temp = cycle.get_temperature(10.0)
+        assert 15.0 < temp <= 30.0
+
+    def test_nighttime_temperature(self):
+        cycle = DiurnalCycle(day_temp=30.0, night_temp=15.0)
+        temp = cycle.get_temperature(2.0)
+        assert temp < 20.0
+
+    def test_daytime_humidity_lower(self):
+        cycle = DiurnalCycle(day_humidity=0.3, night_humidity=0.7)
+        humidity = cycle.get_humidity(14.0)
+        assert humidity < 0.5
+
+    def test_fire_danger_rating_afternoon(self):
+        cycle = DiurnalCycle()
+        danger = cycle.get_fire_danger_rating(14.0)
+        assert 0.5 < danger <= 1.0
+
+    def test_fire_danger_rating_night(self):
+        cycle = DiurnalCycle()
+        danger = cycle.get_fire_danger_rating(2.0)
+        assert 0.0 <= danger < 0.5
+
+    def test_diurnal_update(self):
+        cycle = DiurnalCycle()
+        initial_time = cycle.current_time
+        cycle.update(1.0)
+        assert cycle.current_time == (initial_time + 1.0) % 24.0
+
+    def test_get_atmospheric_conditions(self):
+        cycle = DiurnalCycle()
+        conditions = cycle.get_atmospheric_conditions(14.0)
+        assert isinstance(conditions, AtmosphericConditions)
+        assert conditions.temperature > 20.0
+
+
+class TestTerrainMicroclimate:
+    """Tests for TerrainMicroclimate."""
+
+    def test_aspect_factor_south_facing(self):
+        micro = TerrainMicroclimate(slope_aspect=180.0)
+        factor = micro.compute_aspect_factor()
+        assert factor > 1.0
+
+    def test_aspect_factor_north_facing(self):
+        micro = TerrainMicroclimate(slope_aspect=0.0)
+        factor = micro.compute_aspect_factor()
+        assert factor < 1.0
+
+    def test_slope_effect(self):
+        micro = TerrainMicroclimate(slope_angle=20.0)
+        effect = micro.compute_slope_effect()
+        assert effect > 1.0
+
+    def test_canyon_channeling_downwind(self):
+        micro = TerrainMicroclimate(slope_angle=15.0, slope_aspect=90.0)
+        factor = micro.compute_canyon_channeling(wind_speed=10.0, wind_direction=90.0)
+        assert factor > 1.0
+
+    def test_elevation_effect(self):
+        micro = TerrainMicroclimate(elevation=1000.0)
+        temp_adj, hum_adj = micro.compute_elevation_effect()
+        assert temp_adj < 0.0
+
+    def test_local_conditions(self):
+        micro = TerrainMicroclimate(elevation=500.0)
+        local_temp, local_hum = micro.get_local_conditions(25.0, 0.5)
+        assert local_temp < 25.0
+
+
+class TestFuelMoisture:
+    """Tests for FuelMoisture."""
+
+    def test_fuel_moisture_initialization(self):
+        moisture = FuelMoisture("grass")
+        assert moisture.fuel_type == "grass"
+
+    def test_dead_moisture_property(self):
+        moisture = FuelMoisture("timber")
+        assert 0.0 < moisture.dead_moisture < 1.0
+
+    def test_live_moisture_property(self):
+        moisture = FuelMoisture("shrub")
+        assert 0.0 < moisture.live_moisture < 2.0
+
+    def test_effective_moisture(self):
+        moisture = FuelMoisture("grass")
+        effective = moisture.effective_moisture
+        assert 0.0 < effective < 1.0
+
+    def test_update_dry_conditions(self):
+        moisture = FuelMoisture("grass")
+        initial = moisture.effective_moisture
+        moisture.update(temperature=35.0, humidity=0.2, dt=5.0)
+        assert moisture.effective_moisture < initial
+
+    def test_update_wet_conditions(self):
+        moisture = FuelMoisture("grass")
+        moisture.update(temperature=20.0, humidity=0.9, precipitation=5.0, dt=1.0)
+        assert moisture.dead_moisture > 0.1
+
+    def test_ignition_delay(self):
+        moisture = FuelMoisture("grass")
+        delay = moisture.compute_ignition_delay(300.0)
+        assert delay > 0.0
+
+    def test_ignition_delay_high_moisture(self):
+        moisture = FuelMoisture("grass")
+        moisture.update(temperature=20.0, humidity=0.9, dt=10.0)
+        delay = moisture.compute_ignition_delay(300.0)
+        assert delay > 60.0
+
+
+class TestFuelConsumption:
+    """Tests for FuelConsumption."""
+
+    def test_fuel_consumption_initialization(self):
+        consumption = FuelConsumption()
+        assert consumption.phase == FuelConsumption.FLAMING_PHASE
+
+    def test_update_flaming_phase(self):
+        consumption = FuelConsumption()
+        rate, damage, phase = consumption.update(
+            fire_intensity=500.0, fuel_available=1.0, dt=1.0
+        )
+        assert phase == FuelConsumption.FLAMING_PHASE
+        assert rate > 0.0
+
+    def test_smoldering_transition(self):
+        consumption = FuelConsumption()
+        for _ in range(100):
+            consumption.update(fire_intensity=30.0, fuel_available=1.0, dt=1.0)
+        assert consumption.phase in (
+            FuelConsumption.SMOLDERING_PHASE,
+            FuelConsumption.TRANSITION_PHASE,
+        )
+
+    def test_spread_rate_modifier_flaming(self):
+        consumption = FuelConsumption()
+        modifier = consumption.compute_spread_rate_modifier()
+        assert modifier == 1.0
+
+    def test_spread_rate_modifier_smoldering(self):
+        consumption = FuelConsumption()
+        consumption.phase = FuelConsumption.SMOLDERING_PHASE
+        consumption.smolder_intensity = 0.8
+        modifier = consumption.compute_spread_rate_modifier()
+        assert modifier < 0.5
+
+    def test_reset(self):
+        consumption = FuelConsumption()
+        consumption.phase = FuelConsumption.SMOLDERING_PHASE
+        consumption.consumed_amount = 0.5
+        consumption.reset()
+        assert consumption.phase == FuelConsumption.FLAMING_PHASE
+        assert consumption.consumed_amount == 0.0
+
+
+class TestFireModelEnvironmentalPhysics:
+    """Tests for FireModel environmental physics integration."""
+
+    def test_set_diurnal_cycle(self):
+        model = FireModel()
+        model.set_diurnal_cycle()
+        assert model.diurnal_cycle is not None
+
+    def test_set_fuel_moisture(self):
+        model = FireModel()
+        model.set_fuel_moisture("shrub")
+        assert model.fuel_moisture is not None
+        assert model.fuel_moisture.fuel_type == "shrub"
+
+    def test_fire_danger_rating(self):
+        model = FireModel()
+        model.set_diurnal_cycle()
+        danger = model.get_fire_danger_rating()
+        assert 0.0 <= danger <= 1.0
+
+    def test_current_temperature(self):
+        model = FireModel()
+        model.set_diurnal_cycle()
+        temp = model.get_current_temperature()
+        assert 10.0 < temp < 35.0
+
+    def test_current_humidity(self):
+        model = FireModel()
+        model.set_diurnal_cycle()
+        humidity = model.get_current_humidity()
+        assert 0.0 <= humidity <= 1.0
+
+    def test_dynamics_integration(self):
+        dynamics = FireDynamics()
+        atmospheric = AtmosphericConditions(temperature=30.0, relative_humidity=0.3)
+        dynamics.set_atmospheric_conditions(atmospheric)
+        factor = dynamics.compute_atmospheric_factor()
+        assert factor > 1.0
+
+    def test_microclimate_integration(self):
+        dynamics = FireDynamics()
+        dynamics.set_terrain_microclimate(
+            elevation=500.0, slope_angle=15.0, slope_aspect=180.0
+        )
+        factor = dynamics.compute_microclimate_factor()
+        assert factor > 1.0
+
+    def test_moisture_factor_integration(self):
+        dynamics = FireDynamics()
+        fuel_moisture = FuelMoisture("grass")
+        fuel_moisture.update(temperature=30.0, humidity=0.2, dt=1.0)
+        dynamics.set_fuel_moisture(fuel_moisture)
+        factor = dynamics.compute_moisture_factor()
+        assert factor < 1.0

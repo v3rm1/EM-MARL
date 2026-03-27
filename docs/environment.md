@@ -509,6 +509,152 @@ line_positions = env._create_suppression_line(
 )
 ```
 
+## Advanced Environmental Physics
+
+FireEnv includes advanced environmental physics for realistic fire behavior:
+
+### Atmospheric Conditions
+
+Temperature and humidity affect fire spread:
+
+```python
+from emmarl.envs.fire_dynamics import AtmosphericConditions
+
+conditions = AtmosphericConditions(
+    temperature=30.0,
+    relative_humidity=0.3,
+)
+
+# Fuel moisture content
+moisture = conditions.compute_moisture_content()
+
+# Fire impact factor (>1 increases fire)
+impact = conditions.compute_fire_impact_factor()
+```
+
+Formula: `moisture_content = relative_humidity * exp(-temperature / 20)`
+
+### Diurnal Cycle
+
+Day/night cycle affecting temperature, humidity, and fire danger:
+
+```python
+from emmarl.envs.fire_dynamics import DiurnalCycle
+
+cycle = DiurnalCycle(
+    day_temp=30.0,       # Peak daytime temp
+    night_temp=15.0,     # Minimum nighttime temp
+    day_humidity=0.3,    # Minimum daytime humidity
+    night_humidity=0.7,  # Maximum nighttime humidity
+)
+
+# Get conditions at specific time
+temp = cycle.get_temperature(14.0)    # 2 PM
+humidity = cycle.get_humidity(14.0)
+
+# Fire danger rating (0-1)
+danger = cycle.get_fire_danger_rating(14.0)
+
+# Update cycle
+cycle.update(dt=1.0)  # Advance 1 hour
+```
+
+### Terrain Microclimate
+
+Slope aspect and canyon effects on fire behavior:
+
+```python
+from emmarl.envs.fire_dynamics import TerrainMicroclimate
+
+micro = TerrainMicroclimate(
+    elevation=500.0,
+    slope_angle=15.0,
+    slope_aspect=180.0,  # South-facing
+)
+
+# Aspect factor (south-facing burns faster)
+aspect = micro.compute_aspect_factor()
+
+# Slope effect
+slope = micro.compute_slope_effect()
+
+# Canyon wind channeling
+channeling = micro.compute_canyon_channeling(wind_speed=10.0, wind_direction=45.0)
+
+# Local conditions with elevation adjustment
+local_temp, local_hum = micro.get_local_conditions(25.0, 0.5)
+```
+
+### Fuel Moisture
+
+Species-specific fuel moisture with diurnal cycles:
+
+```python
+from emmarl.envs.fire_dynamics import FuelMoisture
+
+moisture = FuelMoisture(fuel_type="grass")
+
+# Update based on weather
+moisture.update(temperature=30.0, humidity=0.3, dt=1.0)
+
+# Get moisture content
+content = moisture.effective_moisture
+
+# Ignition delay based on moisture
+delay = moisture.compute_ignition_delay(300.0)
+```
+
+Supported fuel types: `grass`, `shrub`, `timber`, `litter`, `chaparral`, `boreal`
+
+### Fuel Consumption
+
+Consumption rate with smoldering phase:
+
+```python
+from emmarl.envs.fire_dynamics import FuelConsumption
+
+consumption = FuelConsumption()
+
+# Update consumption
+rate, damage, phase = consumption.update(
+    fire_intensity=500.0,
+    fuel_available=1.0,
+    dt=1.0,
+)
+
+# Phase: "flaming", "transition", or "smoldering"
+
+# Spread rate modifier
+modifier = consumption.compute_spread_rate_modifier()
+
+# Reset for new fire
+consumption.reset()
+```
+
+### Integration with FireModel
+
+```python
+from emmarl.envs.fire_dynamics import FireModel
+
+model = FireModel()
+
+# Enable diurnal cycle
+model.set_diurnal_cycle(
+    day_temp=32.0,
+    night_temp=12.0,
+    day_humidity=0.25,
+    night_humidity=0.75,
+)
+
+# Enable fuel moisture tracking
+model.set_fuel_moisture("shrub")
+
+# Access environmental conditions
+danger = model.get_fire_danger_rating()
+temp = model.get_current_temperature()
+humidity = model.get_current_humidity()
+```
+
 ### Accessing Fire Properties
 
 ```python

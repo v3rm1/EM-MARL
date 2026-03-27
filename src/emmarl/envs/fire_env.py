@@ -30,6 +30,15 @@ from emmarl.envs.fire_dynamics import (
     AerialSuppressionPhysics,
     SuppressionLinePhysics,
 )
+
+try:
+    from emmarl.envs.fire_jax import JAXFireModel, create_jax_fire_model
+
+    JAX_AVAILABLE = True
+except ImportError:
+    JAX_AVAILABLE = False
+    JAXFireModel = None
+    create_jax_fire_model = None
 from emmarl.envs.render import (
     FireSimRenderer,
     RenderConfig,
@@ -164,6 +173,7 @@ class FireEnv(AECEnv):
     def __init__(
         self,
         config: FireEnvConfig | SimulationConfig | str | Path | None = None,
+        use_jax_fire: bool = False,
     ) -> None:
         """Initialize the FireSim environment.
 
@@ -173,6 +183,7 @@ class FireEnv(AECEnv):
                 - SimulationConfig: Convert to FireEnvConfig
                 - str/Path: Load JSON file and convert
                 - None: Use defaults
+            use_jax_fire: Use JAX-accelerated fire physics (requires JAX)
         """
         super().__init__()
 
@@ -222,7 +233,13 @@ class FireEnv(AECEnv):
             self._render_config = RenderConfig()
 
         self._fire_model: FireModel | None = None
-        self._initialize_fire_model()
+        self._jax_fire_model: JAXFireModel | None = None
+        self._use_jax_fire = use_jax_fire and JAX_AVAILABLE
+
+        if self._use_jax_fire:
+            self._initialize_jax_fire_model()
+        else:
+            self._initialize_fire_model()
 
         self._suppression_physics = SuppressionPhysics()
         self._foam_physics = FoamPhysics()
@@ -384,9 +401,66 @@ class FireEnv(AECEnv):
             wind_direction=self.config.wind_direction,
         )
 
+    def _initialize_jax_fire_model(self) -> None:
+        """Initialize the JAX fire dynamics model."""
+        if not self.config.enable_fire_dynamics:
+            return
+
+        if not JAX_AVAILABLE:
+            import warnings
+
+            warnings.warn("JAX not available, falling back to NumPy fire model")
+            self._use_jax_fire = False
+            self._initialize_fire_model()
+            return
+
+        grid_size = int(max(self.config.map_width, self.config.map_height) / 10)
+        self._jax_fire_model = create_jax_fire_model(
+            grid_height=grid_size,
+            grid_width=grid_size,
+            wind_speed=self.config.wind_speed,
+            wind_direction=self.config.wind_direction,
+            enable_diurnal=True,
+        )
+
     def _update_fire_dynamics(self) -> None:
         """Update fire dynamics if enabled."""
-        if not self.config.enable_fire_dynamics or self._fire_model is None:
+        if not self.config.enable_fire_dynamics:
+            return
+
+        if self._use_jax_fire and self._jax_fire_model is not None:
+            self._update_fire_dynamics_jax()
+        elif self._fire_model is not None:
+            self._update_fire_dynamics_numpy()
+
+    def _update_fire_dynamics_jax(self) -> None:
+        """Update fire dynamics using JAX."""
+        import jax.numpy as jnp
+
+        if self._jax_fire_model is None:
+            return
+
+        grid_size = int(max(self.config.map_width, self.config.map_height) / 10)
+        fuel_map = jnp.full((grid_size, grid_size), 0.5, dtype=jnp.float32)
+        slope_map = jnp.zeros((grid_size, grid_size), dtype=jnp.float32)
+
+        if self._emergency_map.terrain:
+            grid = self._emergency_map.terrain
+            for gy in range(min(grid.height, grid_size)):
+                for gx in range(min(grid.width, grid_size)):
+                    world_x, world_y = grid.to_world_coords(gx, gy)
+                    fuel_load = grid.get_fuel_load(world_x, world_y)
+                    if fuel_load > 0:
+                        fg_x = int(gx * grid_size / grid.width)
+                        fg_y = int(gy * grid_size / grid.height)
+                        if 0 <= fg_x < grid_size and 0 <= fg_y < grid_size:
+                            fuel_map = fuel_map.at[fg_y, fg_x].set(fuel_load)
+
+        self._jax_fire_model.step(fuel_map, slope_map, dt=1.0)
+
+    def _update_fire_dynamics_numpy(self) -> None:
+        """Update fire dynamics using NumPy."""
+        if self._fire_model is None:
             return
 
         fuel_map: dict[tuple[float, float], FuelProperties] = {}
@@ -411,7 +485,7 @@ class FireEnv(AECEnv):
         Civilians take damage only when within fire range.
         Responders take reduced damage based on their protective gear.
         """
-        if not self.config.enable_fire_dynamics or self._fire_model is None:
+        if not self.config.enable_fire_dynamics:
             return
 
         civilian_fire_range = self.config.protection.get("civilian_fire_range", 100.0)
@@ -430,8 +504,16 @@ class FireEnv(AECEnv):
             agent_type = self._get_agent_type(agent)
             position = state.position
 
-            fire_intensity = self._fire_model.get_intensity_at(position)
-            flame_length = self._fire_model.get_flame_length_at(position)
+            if self._use_jax_fire and self._jax_fire_model is not None:
+                fire_intensity = self._jax_fire_model.get_intensity_at(
+                    position[0], position[1]
+                )
+                flame_length = fire_intensity * 2.0
+            elif self._fire_model is not None:
+                fire_intensity = self._fire_model.get_intensity_at(position)
+                flame_length = self._fire_model.get_flame_length_at(position)
+            else:
+                continue
 
             if fire_intensity <= 0 and flame_length <= 0:
                 continue
@@ -476,6 +558,11 @@ class FireEnv(AECEnv):
         self, position: tuple[float, float]
     ) -> tuple[float, tuple[float, float] | None]:
         """Get distance to nearest fire and its position."""
+        if self._use_jax_fire and self._jax_fire_model is not None:
+            return self._jax_fire_model.get_intensity_at(
+                position[0], position[1]
+            ), position
+
         if self._fire_model:
             return self._fire_model.get_fire_distance(position)
 
@@ -581,6 +668,11 @@ class FireEnv(AECEnv):
         Returns:
             True if fire was reduced
         """
+        if self._use_jax_fire and self._jax_fire_model is not None:
+            return self._reduce_fire_intensity_jax(
+                position, amount, effective_range, resource_type
+            )
+
         if self._fire_model is None:
             return False
 
@@ -636,6 +728,63 @@ class FireEnv(AECEnv):
                     fire.intensity *= max(
                         0.0, 1.0 - effectiveness * distance_factor * 0.8
                     )
+
+            self._suppression_applications.append(
+                {
+                    "position": position,
+                    "type": resource_type,
+                    "amount": amount,
+                    "effectiveness": effectiveness,
+                    "time": self._current_step,
+                }
+            )
+
+            return effectiveness > 0
+
+        return False
+
+    def _reduce_fire_intensity_jax(
+        self,
+        position: tuple[float, float],
+        amount: float,
+        effective_range: float = 50.0,
+        resource_type: str = "water",
+    ) -> bool:
+        """Reduce fire intensity using JAX fire model."""
+        if self._jax_fire_model is None:
+            return False
+
+        fire_intensity = self._jax_fire_model.get_intensity_at(position[0], position[1])
+
+        if fire_intensity <= 0:
+            return False
+
+        if resource_type == "water":
+            effectiveness = self._suppression_physics.compute_water_effectiveness(
+                amount,
+                fire_intensity * 1000.0,
+                self.config.water_temperature,
+            )
+
+            self._suppression_applications.append(
+                {
+                    "position": position,
+                    "type": resource_type,
+                    "amount": amount,
+                    "effectiveness": effectiveness,
+                    "time": self._current_step,
+                }
+            )
+
+            return effectiveness > 0
+
+        elif resource_type == "foam":
+            effectiveness = self._foam_physics.compute_foam_effectiveness(
+                amount,
+                fire_intensity * 1000.0,
+                slope_angle=0.0,
+                age=0.0,
+            )
 
             self._suppression_applications.append(
                 {

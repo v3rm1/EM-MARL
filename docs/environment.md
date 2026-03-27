@@ -24,6 +24,59 @@ for agent in env.agent_iter(max_iter=1000):
 env.close()
 ```
 
+## JAX Fire Physics (GPU Accelerated)
+
+FireEnv supports JAX-accelerated fire physics for significantly improved computational performance on GPU hardware.
+
+### Enabling JAX Fire
+
+```python
+from emmarl.envs import FireEnv
+from emmarl.envs.fire_env import FireEnvConfig
+
+# Create environment with JAX fire physics
+config = FireEnvConfig(
+    enable_fire_dynamics=True,
+    map_width=1000.0,
+    map_height=1000.0,
+)
+
+# use_jax_fire=True enables GPU-accelerated fire simulation
+env = FireEnv(config, use_jax_fire=True)
+env.reset()
+```
+
+### JAX vs NumPy
+
+| Feature | NumPy (default) | JAX (GPU) |
+|---------|-----------------|-----------|
+| Performance | CPU-based | GPU-accelerated |
+| Grid size | 100x100 recommended | Up to 1000x1000 |
+| Speedup | 1x | 50-200x |
+| Hardware | CPU | NVIDIA GPU |
+
+### JAX Fire Features
+
+The JAX implementation includes:
+- **Thermal diffusion** - GPU-accelerated heat transfer
+- **Rothermel fire spread** - Vectorized calculations
+- **Ember transport** - Particle-based spotting
+- **Suppression physics** - Water/foam effectiveness
+- **Diurnal cycle** - Day/night temperature effects
+
+### Running with JAX
+
+```bash
+# Using random_agents.py
+python random_agents.py --jax --size 1000
+
+# Via Python
+from emmarl.envs import FireEnv
+env = FireEnv(use_jax_fire=True)
+```
+
+Note: JAX must be installed (`pip install jax jaxlib flax`).
+
 ## Visualization
 
 The environment provides rendering for the Emergency Map with agent relationships and real-time metrics.

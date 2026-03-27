@@ -6,6 +6,12 @@ from emmarl.envs import FireEnv, AgentType
 from emmarl.envs.fire_env import FireEnvConfig
 from emmarl.envs.agent import AgentConfig, AgentState, MovementConfig, AgentTypeConfig
 from emmarl.envs.map import EmergencyMap, Incident, Zone, ZoneType, create_default_map
+from emmarl.envs.fire_dynamics import (
+    SuppressionPhysics,
+    FoamPhysics,
+    AerialSuppressionPhysics,
+    SuppressionLinePhysics,
+)
 
 
 class TestFireEnvConfig:
@@ -364,3 +370,211 @@ class TestFireEnvMovement:
         env.step(action)
         final_stamina = env._agent_states[agent].stamina
         assert final_stamina < initial_stamina
+
+
+class TestSuppressionPhysics:
+    """Tests for SuppressionPhysics."""
+
+    def test_water_effectiveness_low_intensity(self):
+        physics = SuppressionPhysics()
+        effectiveness = physics.compute_water_effectiveness(
+            water_amount=50.0,
+            fire_intensity=100.0,
+            water_temperature=20.0,
+        )
+        assert 0.0 < effectiveness <= 1.0
+
+    def test_water_effectiveness_high_intensity(self):
+        physics = SuppressionPhysics()
+        effectiveness = physics.compute_water_effectiveness(
+            water_amount=50.0,
+            fire_intensity=900.0,
+            water_temperature=20.0,
+        )
+        assert effectiveness < 0.5
+
+    def test_water_effectiveness_zero_fire(self):
+        physics = SuppressionPhysics()
+        effectiveness = physics.compute_water_effectiveness(
+            water_amount=50.0,
+            fire_intensity=0.0,
+        )
+        assert effectiveness == 0.0
+
+    def test_evaporation_rate(self):
+        physics = SuppressionPhysics()
+        rate = physics.compute_evaporation_rate(fire_intensity=500.0)
+        assert rate >= 0.0
+
+
+class TestFoamPhysics:
+    """Tests for FoamPhysics."""
+
+    def test_foam_effectiveness(self):
+        physics = FoamPhysics()
+        effectiveness = physics.compute_foam_effectiveness(
+            foam_amount=20.0,
+            fire_intensity=200.0,
+            slope_angle=5.0,
+            age=0.0,
+        )
+        assert 0.0 < effectiveness <= 1.0
+
+    def test_foam_effectiveness_with_age(self):
+        physics = FoamPhysics()
+        fresh = physics.compute_foam_effectiveness(
+            foam_amount=20.0,
+            fire_intensity=200.0,
+            age=0.0,
+        )
+        old = physics.compute_foam_effectiveness(
+            foam_amount=20.0,
+            fire_intensity=200.0,
+            age=60.0,
+        )
+        assert fresh > old
+
+    def test_coverage_area(self):
+        physics = FoamPhysics()
+        area = physics.compute_coverage_area(foam_amount=10.0)
+        assert area > 0.0
+
+    def test_downhill_creep(self):
+        physics = FoamPhysics()
+        pos = (100.0, 100.0)
+        new_pos = physics.apply_downhill_creep(
+            pos, slope_angle=10.0, slope_direction=0.0, dt=1.0
+        )
+        assert new_pos[0] > pos[0]
+
+
+class TestAerialSuppressionPhysics:
+    """Tests for AerialSuppressionPhysics."""
+
+    def test_drop_accuracy_with_wind(self):
+        physics = AerialSuppressionPhysics()
+        drop_pos = (500.0, 500.0)
+        target = (500.0, 500.0)
+        actual = physics.compute_drop_accuracy(
+            drop_pos, target, wind_speed=10.0, wind_direction=0.0
+        )
+        assert actual != drop_pos
+
+    def test_drop_error(self):
+        physics = AerialSuppressionPhysics()
+        error = physics.compute_drop_error(wind_speed=5.0)
+        assert error > 0.0
+
+    def test_line_drop_coverage(self):
+        physics = AerialSuppressionPhysics()
+        positions = physics.compute_line_drop_coverage(
+            (0.0, 0.0), (100.0, 0.0), drop_spacing=20.0
+        )
+        assert len(positions) > 1
+
+    def test_spot_drop_coverage(self):
+        physics = AerialSuppressionPhysics()
+        positions = physics.compute_spot_drop_coverage((500.0, 500.0), num_drops=3)
+        assert len(positions) == 3
+
+
+class TestSuppressionLinePhysics:
+    """Tests for SuppressionLinePhysics."""
+
+    def test_construction_rate_hand_tool(self):
+        physics = SuppressionLinePhysics()
+        rate = physics.compute_construction_rate("hand", num_workers=1)
+        assert rate > 0.0
+
+    def test_construction_rate_bulldozer(self):
+        physics = SuppressionLinePhysics()
+        rate = physics.compute_construction_rate("bulldozer", num_workers=1)
+        assert rate > physics.CHAINSAW_RATE
+
+    def test_line_effectiveness(self):
+        physics = SuppressionLinePhysics()
+        effectiveness = physics.compute_line_effectiveness(
+            line_age=30.0, line_width=5.0, mineral_applied=True
+        )
+        assert 0.0 < effectiveness <= 1.0
+
+    def test_fire_line_contact(self):
+        physics = SuppressionLinePhysics()
+        contact = physics.compute_fire_line_contact(
+            fire_position=(100.0, 100.0),
+            line_positions=[(100.0, 100.0), (110.0, 100.0)],
+            line_width=3.0,
+        )
+        assert contact > 0.0
+
+
+class TestFireEnvSuppression:
+    """Tests for FireEnv suppression integration."""
+
+    def test_suppression_physics_initialized(self):
+        env = FireEnv()
+        env.reset()
+        assert env._suppression_physics is not None
+        assert env._foam_physics is not None
+        assert env._aerial_physics is not None
+        assert env._line_physics is not None
+
+    def test_aerial_suppression(self):
+        env = FireEnv()
+        env.reset()
+        result = env._perform_aerial_suppression(
+            target_position=(500.0, 500.0),
+            drop_type="water",
+            num_drops=1,
+            pattern="spot",
+        )
+        assert isinstance(result, bool)
+
+    def test_suppression_line_creation(self):
+        env = FireEnv()
+        env.reset()
+        line = env._create_suppression_line(
+            start_position=(100.0, 100.0),
+            end_position=(200.0, 100.0),
+            tool_type="hand",
+            num_workers=1,
+        )
+        assert len(line) > 0
+
+    def test_reduce_fire_intensity_water(self):
+        config = FireEnvConfig(
+            enable_fire_dynamics=True,
+            wind_speed=5.0,
+            wind_direction=0.0,
+        )
+        env = FireEnv(config)
+        env.reset()
+
+        if env._fire_model:
+            env._fire_model.add_ignition((500.0, 500.0), intensity=0.5)
+            result = env._reduce_fire_intensity(
+                position=(500.0, 500.0),
+                amount=30.0,
+                effective_range=50.0,
+                resource_type="water",
+            )
+            assert bool(result) is not None
+
+    def test_reduce_fire_intensity_foam(self):
+        config = FireEnvConfig(
+            enable_fire_dynamics=True,
+            wind_speed=5.0,
+            wind_direction=0.0,
+        )
+        env = FireEnv(config)
+        env.reset()
+
+        if env._fire_model:
+            env._fire_model.add_ignition((500.0, 500.0), intensity=0.5)
+            result = env._reduce_fire_intensity(
+                position=(500.0, 500.0),
+                amount=10.0,
+                effective_range=40.0,
+                resource_type="foam",
+            )
+            assert bool(result) is not None

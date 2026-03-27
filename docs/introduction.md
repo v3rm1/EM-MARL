@@ -55,3 +55,20 @@ Each agent type has distinct:
 ## Getting Started
 
 See [Installation](installation.md) for setup instructions, or jump to [Environment](environment.md) to understand the simulation mechanics.
+
+## Terrain Types
+
+FireSim implements the following terrain types affecting movement and fire behavior:
+
+| Terrain | Speed | Fuel | Fire Resistance | Notes |
+|---------|-------|------|-----------------|-------|
+| `OPEN` | 1.0x | 0.1 | 0.9 | Open ground (default) |
+| `FOREST` | 0.6x | 0.9 | 0.1 | High fuel, canopy for crown fire |
+| `GRASS` | 0.8x | 0.6 | 0.3 | Medium fuel grassland |
+| `URBAN` | 0.9x | 0.4 | 0.5 | Buildings and structures |
+| `ROAD` | 1.2x | 0.0 | 1.0 | Fast movement, no fuel |
+| `WATER` | 0.0x | 0.0 | 1.0 | Impassable, fire barrier |
+| `BUILDING` | 0.5x | 0.5 | 0.6 | Building footprint |
+| `BURNED` | 0.7x | 0.0 | 1.0 | Burned area, no fuel |
+
+See [Map System](map_system.md) for detailed terrain properties and usage.

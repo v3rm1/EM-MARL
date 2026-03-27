@@ -344,6 +344,171 @@ fire_state = FireState(
 )
 ```
 
+## Fire Suppression Physics
+
+FireEnv includes realistic fire suppression physics modeling water, foam, and aerial suppression:
+
+### Water Suppression Physics
+
+Water effectiveness decreases with fire intensity and temperature:
+
+```python
+from emmarl.envs.fire_dynamics import SuppressionPhysics
+
+physics = SuppressionPhysics()
+
+# Compute water effectiveness
+effectiveness = physics.compute_water_effectiveness(
+    water_amount=50.0,      # gallons
+    fire_intensity=500.0,  # kW/m
+    water_temperature=20.0, # Celsius
+)
+# Returns: 0.0 - 1.0
+
+# Compute evaporation rate
+evaporation_rate = physics.compute_evaporation_rate(
+    fire_intensity=500.0,
+    water_temperature=20.0,
+)
+```
+
+Formula: `effective_suppression = water_amount * (1 - fire_intensity / max_intensity) * temp_factor`
+
+### Foam/Retardant Physics
+
+Foam includes chemical persistence and downhill creep:
+
+```python
+from emmarl.envs.fire_dynamics import FoamPhysics
+
+foam = FoamPhysics()
+
+# Effectiveness with persistence and slope
+eff = foam.compute_foam_effectiveness(
+    foam_amount=20.0,
+    fire_intensity=200.0,
+    slope_angle=5.0,   # degrees
+    age=0.0,           # seconds since application
+)
+
+# Coverage area
+area = foam.compute_coverage_area(foam_amount=10.0)
+
+# Downhill creep
+new_pos = foam.apply_downhill_creep(
+    position=(100.0, 100.0),
+    slope_angle=10.0,
+    slope_direction=0.0,  # radians
+    dt=1.0,                # time step
+)
+```
+
+### Aerial Suppression
+
+Aerial drops model wind drift and coverage patterns:
+
+```python
+from emmarl.envs.fire_dynamics import AerialSuppressionPhysics
+
+aerial = AerialSuppressionPhysics()
+
+# Compute drop position with wind drift
+actual_pos = aerial.compute_drop_accuracy(
+    drop_position=(500.0, 500.0),
+    target_position=(500.0, 500.0),
+    wind_speed=10.0,
+    wind_direction=45.0,  # degrees
+    release_height=100.0, # meters
+)
+
+# Expected error radius
+error = aerial.compute_drop_error(wind_speed=5.0, release_height=100.0)
+
+# Line coverage pattern
+line_drops = aerial.compute_line_drop_coverage(
+    start_position=(0.0, 0.0),
+    end_position=(100.0, 0.0),
+    drop_spacing=20.0,
+)
+
+# Spot coverage pattern
+spot_drops = aerial.compute_spot_drop_coverage(
+    target_position=(500.0, 500.0),
+    num_drops=3,
+    spread_radius=30.0,
+)
+```
+
+### Suppression Line Construction
+
+Progressive line construction with tool effectiveness:
+
+```python
+from emmarl.envs.fire_dynamics import SuppressionLinePhysics
+
+line = SuppressionLinePhysics()
+
+# Construction rate by tool type
+rate_hand = line.compute_construction_rate("hand", num_workers=1)
+rate_chainsaw = line.compute_construction_rate("chainsaw", num_workers=1)
+rate_bulldozer = line.compute_construction_rate("bulldozer", num_workers=1)
+
+# Line effectiveness
+eff = line.compute_line_effectiveness(
+    line_age=30.0,        # seconds
+    line_width=5.0,      # meters
+    mineral_applied=True,
+)
+
+# Fire-line contact
+contact = line.compute_fire_line_contact(
+    fire_position=(100.0, 100.0),
+    line_positions=[(100.0, 100.0), (110.0, 100.0)],
+    line_width=3.0,
+)
+```
+
+### Using Suppression in FireEnv
+
+```python
+from emmarl.envs import FireEnv
+from emmarl.envs.fire_env import FireEnvConfig
+
+config = FireEnvConfig(
+    enable_fire_dynamics=True,
+    wind_speed=10.0,
+    wind_direction=0.0,
+    water_temperature=20.0,
+    suppression={
+        "water_effectiveness": 1.0,
+        "foam_effectiveness": 1.5,
+        "retardant_effectiveness": 2.0,
+    }
+)
+
+env = FireEnv(config)
+env.reset()
+
+# Firefighters use physics-based suppression
+# via extinguish and use_foam actions
+
+# Aerial suppression
+env._perform_aerial_suppression(
+    target_position=(500.0, 500.0),
+    drop_type="water",
+    num_drops=3,
+    pattern="spot",
+)
+
+# Create suppression line
+line_positions = env._create_suppression_line(
+    start_position=(100.0, 100.0),
+    end_position=(200.0, 100.0),
+    tool_type="hand",
+    num_workers=2,
+)
+```
+
 ### Accessing Fire Properties
 
 ```python

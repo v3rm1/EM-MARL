@@ -884,3 +884,406 @@ def create_default_fire_model(
             model.add_ignition(point)
 
     return model
+
+
+@dataclass
+class SuppressionResource:
+    """Suppression resource type."""
+
+    WATER: str = "water"
+    FOAM: str = "foam"
+    RETARDANT: str = "retardant"
+    AERIAL_WATER: str = "aerial_water"
+
+
+@dataclass
+class SuppressionPhysics:
+    """Physics model for fire suppression effectiveness.
+
+    Models water/foam/retardant application effectiveness based on:
+    - Fire intensity at target location
+    - Water temperature and evaporation rates
+    - Chemical persistence for foam/retardant
+    - Downhill creep effects for liquids
+    """
+
+    MAX_FIRE_INTENSITY: float = 1000.0
+    WATER_TEMPERATURE: float = 20.0
+    WATER_BOILING_POINT: float = 100.0
+    LATENT_HEAT_VAPORIZATION: float = 2260000.0
+
+    def compute_water_effectiveness(
+        self,
+        water_amount: float,
+        fire_intensity: float,
+        water_temperature: float = 20.0,
+    ) -> float:
+        """Compute water suppression effectiveness.
+
+        Args:
+            water_amount: Amount of water applied (gallons)
+            fire_intensity: Fire intensity at target (kW/m)
+            water_temperature: Temperature of water (Celsius)
+
+        Returns:
+            Effective suppression value (0-1)
+        """
+        if water_amount <= 0 or fire_intensity <= 0:
+            return 0.0
+
+        if fire_intensity >= self.MAX_FIRE_INTENSITY:
+            return 0.0
+
+        temp_factor = max(
+            0.5, 1.0 - (water_temperature - self.WATER_TEMPERATURE) / 100.0
+        )
+
+        intensity_factor = 1.0 - (fire_intensity / self.MAX_FIRE_INTENSITY)
+
+        effective_suppression = water_amount * intensity_factor * temp_factor
+
+        return min(effective_suppression / 100.0, 1.0)
+
+    def compute_evaporation_rate(
+        self,
+        fire_intensity: float,
+        water_temperature: float = 20.0,
+    ) -> float:
+        """Compute water evaporation rate based on fire intensity.
+
+        Args:
+            fire_intensity: Fire intensity at target (kW/m)
+            water_temperature: Temperature of water (Celsius)
+
+        Returns:
+            Evaporation rate (gallons/second)
+        """
+        if fire_intensity <= 0:
+            return 0.0
+
+        temp_above_boiling = max(0.0, water_temperature - self.WATER_BOILING_POINT)
+
+        evaporation = (fire_intensity / self.LATENT_HEAT_VAPORIZATION) * 0.001
+
+        evaporation *= 1.0 + temp_above_boiling / 100.0
+
+        return min(evaporation, 1.0)
+
+
+@dataclass
+class FoamPhysics:
+    """Physics model for foam/retardant suppression behavior.
+
+    Models:
+    - Chemical persistence factor
+    - Downhill creep effect
+    - Coverage area
+    """
+
+    PERSISTENCE_DECAY_RATE: float = 0.02
+    DOWNSLOPE_CREEP_FACTOR: float = 0.15
+    COVERAGE_RADIUS_FACTOR: float = 2.0
+
+    def compute_foam_effectiveness(
+        self,
+        foam_amount: float,
+        fire_intensity: float,
+        slope_angle: float = 0.0,
+        age: float = 0.0,
+    ) -> float:
+        """Compute foam/retardant suppression effectiveness.
+
+        Args:
+            foam_amount: Amount of foam applied (gallons)
+            fire_intensity: Fire intensity at target (kW/m)
+            slope_angle: Slope of terrain (degrees, positive = downhill)
+            age: Time since application (seconds)
+
+        Returns:
+            Effective suppression value (0-1)
+        """
+        if foam_amount <= 0 or fire_intensity <= 0:
+            return 0.0
+
+        persistence_factor = max(0.1, 1.0 - age * self.PERSISTENCE_DECAY_RATE)
+
+        slope_factor = 1.0
+        if slope_angle > 0:
+            slope_factor = 1.0 + slope_angle * self.DOWNSLOPE_CREEP_FACTOR / 10.0
+
+        intensity_factor = max(0.2, 1.0 - fire_intensity / 1500.0)
+
+        effectiveness = (
+            foam_amount * persistence_factor * slope_factor * intensity_factor
+        )
+
+        return min(effectiveness / 50.0, 1.0)
+
+    def compute_coverage_area(self, foam_amount: float) -> float:
+        """Compute coverage area from foam amount.
+
+        Args:
+            foam_amount: Amount of foam applied (gallons)
+
+        Returns:
+            Coverage area in square meters
+        """
+        return foam_amount * self.COVERAGE_RADIUS_FACTOR
+
+    def apply_downhill_creep(
+        self,
+        position: tuple[float, float],
+        slope_angle: float,
+        slope_direction: float,
+        dt: float,
+    ) -> tuple[float, float]:
+        """Apply downhill creep to foam position.
+
+        Args:
+            position: Current position (x, y)
+            slope_angle: Slope angle in degrees
+            slope_direction: Direction of slope in radians
+            dt: Time step (seconds)
+
+        Returns:
+            New position after creep
+        """
+        if slope_angle <= 0:
+            return position
+
+        creep_distance = slope_angle * self.DOWNSLOPE_CREEP_FACTOR * dt / 10.0
+
+        new_x = position[0] + np.cos(slope_direction) * creep_distance
+        new_y = position[1] + np.sin(slope_direction) * creep_distance
+
+        return (new_x, new_y)
+
+
+@dataclass
+class AerialSuppressionPhysics:
+    """Physics model for aerial water/retardant drops.
+
+    Models:
+    - Wind drift effects on drop accuracy
+    - Coverage pattern (line vs spot drops)
+    - Drop dispersion
+    """
+
+    DROP_VELOCITY: float = 20.0
+    DISPERSION_FACTOR: float = 5.0
+
+    def compute_drop_accuracy(
+        self,
+        drop_position: tuple[float, float],
+        target_position: tuple[float, float],
+        wind_speed: float,
+        wind_direction: float,
+        release_height: float = 100.0,
+    ) -> tuple[float, float]:
+        """Compute actual drop position accounting for wind.
+
+        Args:
+            drop_position: Intended drop position (x, y)
+            target_position: Target fire position (x, y)
+            wind_speed: Wind speed (m/s)
+            wind_direction: Wind direction (degrees)
+            release_height: Aircraft release height (meters)
+
+        Returns:
+            Actual drop position (x, y)
+        """
+        fall_time = release_height / self.DROP_VELOCITY
+
+        wind_rad = np.radians(wind_direction)
+        wind_drift_x = wind_speed * np.cos(wind_rad) * fall_time
+        wind_drift_y = wind_speed * np.sin(wind_rad) * fall_time
+
+        actual_x = drop_position[0] + wind_drift_x * 0.5
+        actual_y = drop_position[1] + wind_drift_y * 0.5
+
+        return (actual_x, actual_y)
+
+    def compute_drop_error(
+        self,
+        wind_speed: float,
+        release_height: float = 100.0,
+    ) -> float:
+        """Compute expected drop error due to wind.
+
+        Args:
+            wind_speed: Wind speed (m/s)
+            release_height: Aircraft release height (meters)
+
+        Returns:
+            Error radius in meters
+        """
+        fall_time = release_height / self.DROP_VELOCITY
+
+        base_error = wind_speed * fall_time * 0.3
+
+        return base_error + self.DISPERSION_FACTOR
+
+    def compute_line_drop_coverage(
+        self,
+        start_position: tuple[float, float],
+        end_position: tuple[float, float],
+        drop_spacing: float = 20.0,
+    ) -> list[tuple[float, float]]:
+        """Compute drop positions for line coverage pattern.
+
+        Args:
+            start_position: Start of fire line (x, y)
+            end_position: End of fire line (x, y)
+            drop_spacing: Spacing between drops (meters)
+
+        Returns:
+            List of drop positions
+        """
+        dx = end_position[0] - start_position[0]
+        dy = end_position[1] - start_position[1]
+        line_length = np.sqrt(dx * dx + dy * dy)
+
+        if line_length < 1.0:
+            return [start_position]
+
+        num_drops = max(1, int(line_length / drop_spacing))
+
+        positions = []
+        for i in range(num_drops + 1):
+            t = i / max(1, num_drops)
+            x = start_position[0] + dx * t
+            y = start_position[1] + dy * t
+            positions.append((x, y))
+
+        return positions
+
+    def compute_spot_drop_coverage(
+        self,
+        target_position: tuple[float, float],
+        num_drops: int = 3,
+        spread_radius: float = 30.0,
+    ) -> list[tuple[float, float]]:
+        """Compute drop positions for spot coverage pattern.
+
+        Args:
+            target_position: Target fire center (x, y)
+            num_drops: Number of drops
+            spread_radius: Radius to spread drops (meters)
+
+        Returns:
+            List of drop positions
+        """
+        positions = [target_position]
+
+        if num_drops <= 1:
+            return positions
+
+        for i in range(num_drops - 1):
+            angle = (2 * np.pi * i) / (num_drops - 1)
+            distance = spread_radius * np.random.uniform(0.5, 1.0)
+
+            x = target_position[0] + np.cos(angle) * distance
+            y = target_position[1] + np.sin(angle) * distance
+
+            positions.append((x, y))
+
+        return positions
+
+
+@dataclass
+class SuppressionLinePhysics:
+    """Physics model for progressive suppression line construction.
+
+    Models:
+    - Tool effectiveness factors
+    - Line construction rate
+    - Containment effectiveness
+    """
+
+    HAND_TOOL_RATE: float = 0.5
+    CHAINSAW_RATE: float = 1.5
+    BULDOZER_RATE: float = 3.0
+    MINERAL_SOIL_EFFECTIVENESS: float = 0.8
+
+    def compute_construction_rate(
+        self,
+        tool_type: str,
+        num_workers: int = 1,
+        slope_angle: float = 0.0,
+    ) -> float:
+        """Compute suppression line construction rate.
+
+        Args:
+            tool_type: Type of tool ("hand", "chainsaw", "bulldozer")
+            num_workers: Number of workers
+            slope_angle: Terrain slope (degrees)
+
+        Returns:
+            Construction rate (meters/second)
+        """
+        base_rate = self.HAND_TOOL_RATE
+
+        if tool_type.lower() == "chainsaw":
+            base_rate = self.CHAINSAW_RATE
+        elif tool_type.lower() == "bulldozer":
+            base_rate = self.BULDOZER_RATE
+
+        slope_factor = max(0.3, 1.0 - slope_angle * 0.05)
+
+        return base_rate * num_workers * slope_factor
+
+    def compute_line_effectiveness(
+        self,
+        line_age: float,
+        line_width: float,
+        mineral_applied: bool = False,
+    ) -> float:
+        """Compute containment line effectiveness.
+
+        Args:
+            line_age: Time since line creation (seconds)
+            line_width: Width of containment line (meters)
+            mineral_applied: Whether mineral soil was applied
+
+        Returns:
+            Effectiveness value (0-1)
+        """
+        base_effectiveness = min(line_width / 10.0, 1.0)
+
+        if mineral_applied:
+            base_effectiveness *= self.MINERAL_SOIL_EFFECTIVENESS
+
+        age_factor = min(1.0, line_age / 60.0)
+
+        return base_effectiveness * (0.5 + 0.5 * age_factor)
+
+    def compute_fire_line_contact(
+        self,
+        fire_position: tuple[float, float],
+        line_positions: list[tuple[float, float]],
+        line_width: float = 3.0,
+    ) -> float:
+        """Compute fire contact with containment line.
+
+        Args:
+            fire_position: Fire front position (x, y)
+            line_positions: List of line segment positions
+            line_width: Width of line (meters)
+
+        Returns:
+            Contact intensity (0-1)
+        """
+        if not line_positions:
+            return 0.0
+
+        min_dist = float("inf")
+        for pos in line_positions:
+            dist = np.sqrt(
+                (fire_position[0] - pos[0]) ** 2 + (fire_position[1] - pos[1]) ** 2
+            )
+            min_dist = min(min_dist, dist)
+
+        if min_dist < line_width:
+            return 1.0 - (min_dist / line_width)
+
+        return 0.0

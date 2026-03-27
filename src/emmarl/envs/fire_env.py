@@ -25,6 +25,10 @@ from emmarl.envs.fire_dynamics import (
     FireModel,
     create_default_fire_model,
     FuelProperties,
+    SuppressionPhysics,
+    FoamPhysics,
+    AerialSuppressionPhysics,
+    SuppressionLinePhysics,
 )
 from emmarl.envs.render import (
     FireSimRenderer,
@@ -90,6 +94,16 @@ class FireEnvConfig:
             "turn_rate": 0.2,
         }
     )
+    suppression: dict[str, float] = field(
+        default_factory=lambda: {
+            "water_effectiveness": 1.0,
+            "foam_effectiveness": 1.5,
+            "retardant_effectiveness": 2.0,
+            "aerial_drop_accuracy": 0.7,
+            "line_construction_rate": 1.0,
+        }
+    )
+    water_temperature: float = 20.0
 
     @classmethod
     def from_config(cls, config: SimulationConfig) -> FireEnvConfig:
@@ -107,6 +121,7 @@ class FireEnvConfig:
         action_ranges = config.action_ranges
         protection = config.protection
         movement = config.movement
+        suppression = config.suppression if hasattr(config, "suppression") else {}
 
         return cls(
             num_medics=agents.get("num_medics", 2),
@@ -125,6 +140,8 @@ class FireEnvConfig:
             action_ranges=action_ranges.copy(),
             protection=protection.copy(),
             movement=movement.copy(),
+            suppression=suppression.copy() if suppression else {},
+            water_temperature=env.get("water_temperature", 20.0),
         )
 
 
@@ -206,6 +223,13 @@ class FireEnv(AECEnv):
 
         self._fire_model: FireModel | None = None
         self._initialize_fire_model()
+
+        self._suppression_physics = SuppressionPhysics()
+        self._foam_physics = FoamPhysics()
+        self._aerial_physics = AerialSuppressionPhysics()
+        self._line_physics = SuppressionLinePhysics()
+
+        self._suppression_applications: list[dict] = []
 
         self._episode_metrics = EpisodeMetrics()
 
@@ -544,17 +568,87 @@ class FireEnv(AECEnv):
         position: tuple[float, float],
         amount: float,
         effective_range: float = 50.0,
+        resource_type: str = "water",
     ) -> bool:
-        """Reduce fire intensity at position. Returns True if fire was reduced.
+        """Reduce fire intensity at position using suppression physics.
 
         Args:
             position: Position of the firefighter
             amount: Base amount to reduce
             effective_range: Maximum range to affect fire
+            resource_type: Type of suppression resource ("water", "foam", "retardant")
 
         Returns:
             True if fire was reduced
         """
+        if self._fire_model is None:
+            return False
+
+        fire_intensity = self._fire_model.get_intensity_at(position)
+        if fire_intensity <= 0:
+            return False
+
+        if resource_type == "water":
+            effectiveness = self._suppression_physics.compute_water_effectiveness(
+                amount,
+                fire_intensity * 1000.0,
+                self.config.water_temperature,
+            )
+            for fire in self._fire_model.fires:
+                dist = np.sqrt(
+                    (fire.position[0] - position[0]) ** 2
+                    + (fire.position[1] - position[1]) ** 2
+                )
+                if dist < effective_range:
+                    distance_factor = 1.0 - (dist / effective_range)
+                    fire.intensity *= max(0.0, 1.0 - effectiveness * distance_factor)
+                    fire.fire_line_intensity *= max(
+                        0.0, 1.0 - effectiveness * distance_factor
+                    )
+
+            self._suppression_applications.append(
+                {
+                    "position": position,
+                    "type": resource_type,
+                    "amount": amount,
+                    "effectiveness": effectiveness,
+                    "time": self._current_step,
+                }
+            )
+
+            return effectiveness > 0
+
+        elif resource_type == "foam":
+            slope_angle = 0.0
+            effectiveness = self._foam_physics.compute_foam_effectiveness(
+                amount,
+                fire_intensity * 1000.0,
+                slope_angle,
+                age=0.0,
+            )
+            for fire in self._fire_model.fires:
+                dist = np.sqrt(
+                    (fire.position[0] - position[0]) ** 2
+                    + (fire.position[1] - position[1]) ** 2
+                )
+                if dist < effective_range:
+                    distance_factor = 1.0 - (dist / effective_range)
+                    fire.intensity *= max(
+                        0.0, 1.0 - effectiveness * distance_factor * 0.8
+                    )
+
+            self._suppression_applications.append(
+                {
+                    "position": position,
+                    "type": resource_type,
+                    "amount": amount,
+                    "effectiveness": effectiveness,
+                    "time": self._current_step,
+                }
+            )
+
+            return effectiveness > 0
+
         return False
 
     def _initialize_agents(self) -> None:
@@ -804,7 +898,7 @@ class FireEnv(AECEnv):
         """Firefighter extinguishes nearby fire incidents.
 
         Firefighters must be within effective range of the fire to extinguish it.
-        Effectiveness decreases with distance.
+        Uses realistic suppression physics: water effectiveness decreases with fire intensity.
         """
         config = self._agent_configs[agent]
         if not config.has_resource("water", 10):
@@ -812,14 +906,40 @@ class FireEnv(AECEnv):
 
         firefighter_range = self.config.action_ranges.get("firefighter_range", 50.0)
 
+        if self._fire_model is not None:
+            fire_reduced = self._reduce_fire_intensity(
+                state.position,
+                amount=10.0,
+                effective_range=firefighter_range,
+                resource_type="water",
+            )
+            if fire_reduced:
+                config.consume_resource("water", 10)
+
         incident, dist = self._emergency_map.get_nearest_active_incident(state.position)
         if (
             incident
             and dist < firefighter_range
             and incident.incident_type == ZoneType.FIRE
         ):
-            if config.consume_resource("water", 10):
+            if config.has_resource("water", 10):
+                config.consume_resource("water", 10)
                 effectiveness = 1.0 - (dist / firefighter_range)
+                water_amount = 10.0 * self.config.suppression.get(
+                    "water_effectiveness", 1.0
+                )
+
+                if self._fire_model is not None:
+                    fire_intensity = self._fire_model.get_intensity_at(state.position)
+                    suppression_eff = (
+                        self._suppression_physics.compute_water_effectiveness(
+                            water_amount,
+                            fire_intensity * 1000.0,
+                            self.config.water_temperature,
+                        )
+                    )
+                    effectiveness *= suppression_eff
+
                 incident.reduce_severity(0.2 * effectiveness)
                 if incident.is_resolved():
                     self._resolved_incidents += 1
@@ -828,12 +948,23 @@ class FireEnv(AECEnv):
         """Firefighter uses foam on hazardous incidents.
 
         Foam is more effective than water but has shorter range.
+        Uses foam physics for persistence and downhill creep effects.
         """
         config = self._agent_configs[agent]
         if not config.has_resource("foam", 5):
             return
 
         foam_range = self.config.action_ranges.get("foam_range", 40.0)
+
+        if self._fire_model is not None:
+            fire_reduced = self._reduce_fire_intensity(
+                state.position,
+                amount=5.0,
+                effective_range=foam_range,
+                resource_type="foam",
+            )
+            if fire_reduced:
+                config.consume_resource("foam", 5)
 
         incident, dist = self._emergency_map.get_nearest_active_incident(state.position)
         if (
@@ -845,8 +976,23 @@ class FireEnv(AECEnv):
                 ZoneType.HAZMAT,
             )
         ):
-            if config.consume_resource("foam", 5):
+            if config.has_resource("foam", 5):
+                config.consume_resource("foam", 5)
                 effectiveness = 1.0 - (dist / foam_range)
+                foam_amount = 5.0 * self.config.suppression.get(
+                    "foam_effectiveness", 1.5
+                )
+
+                if self._fire_model is not None:
+                    fire_intensity = self._fire_model.get_intensity_at(state.position)
+                    foam_eff = self._foam_physics.compute_foam_effectiveness(
+                        foam_amount,
+                        fire_intensity * 1000.0,
+                        slope_angle=0.0,
+                        age=0.0,
+                    )
+                    effectiveness *= foam_eff
+
                 incident.reduce_severity(0.3 * effectiveness)
                 if incident.is_resolved():
                     self._resolved_incidents += 1
@@ -874,6 +1020,129 @@ class FireEnv(AECEnv):
         config = self._agent_configs[agent]
         if config.consume_resource("barriers", 1):
             pass
+
+    def _perform_aerial_suppression(
+        self,
+        target_position: tuple[float, float],
+        drop_type: str = "water",
+        num_drops: int = 1,
+        pattern: str = "spot",
+    ) -> bool:
+        """Perform aerial suppression drop.
+
+        Args:
+            target_position: Target position for drops
+            drop_type: Type of drop ("water", "retardant")
+            num_drops: Number of drops
+            pattern: Drop pattern ("spot", "line")
+
+        Returns:
+            True if suppression was effective
+        """
+        if self._fire_model is None:
+            return False
+
+        wind_speed = self.config.wind_speed
+        wind_direction = self.config.wind_direction
+
+        if pattern == "line":
+            drop_positions = self._aerial_physics.compute_line_drop_coverage(
+                target_position,
+                (target_position[0] + 100, target_position[1]),
+                drop_spacing=20.0,
+            )
+        else:
+            drop_positions = self._aerial_physics.compute_spot_drop_coverage(
+                target_position,
+                num_drops=num_drops,
+                spread_radius=30.0,
+            )
+
+        total_effectiveness = 0.0
+
+        for drop_pos in drop_positions:
+            actual_pos = self._aerial_physics.compute_drop_accuracy(
+                drop_pos,
+                target_position,
+                wind_speed,
+                wind_direction,
+            )
+
+            drop_error = self._aerial_physics.compute_drop_error(
+                wind_speed, release_height=100.0
+            )
+
+            for fire in self._fire_model.fires:
+                dist = np.sqrt(
+                    (fire.position[0] - actual_pos[0]) ** 2
+                    + (fire.position[1] - actual_pos[1]) ** 2
+                )
+
+                if dist < drop_error + 20.0:
+                    distance_factor = max(0.0, 1.0 - dist / (drop_error + 20.0))
+
+                    amount = 100.0 if drop_type == "water" else 50.0
+                    effectiveness = (
+                        self._suppression_physics.compute_water_effectiveness(
+                            amount,
+                            fire.fire_line_intensity,
+                            self.config.water_temperature,
+                        )
+                    )
+
+                    fire.intensity *= max(
+                        0.0, 1.0 - effectiveness * distance_factor * 0.3
+                    )
+                    fire.fire_line_intensity *= max(
+                        0.0, 1.0 - effectiveness * distance_factor * 0.3
+                    )
+
+                    total_effectiveness += effectiveness * distance_factor
+
+        return total_effectiveness > 0.1
+
+    def _create_suppression_line(
+        self,
+        start_position: tuple[float, float],
+        end_position: tuple[float, float],
+        tool_type: str = "hand",
+        num_workers: int = 1,
+    ) -> list[tuple[float, float]]:
+        """Create a suppression line between two points.
+
+        Args:
+            start_position: Start of line (x, y)
+            end_position: End of line (x, y)
+            tool_type: Type of tool ("hand", "chainsaw", "bulldozer")
+            num_workers: Number of workers
+
+        Returns:
+            List of line segment positions
+        """
+        dx = end_position[0] - start_position[0]
+        dy = end_position[1] - start_position[1]
+        line_length = np.sqrt(dx * dx + dy * dy)
+
+        if line_length < 1.0:
+            return [start_position]
+
+        construction_rate = self._line_physics.compute_construction_rate(
+            tool_type, num_workers, slope_angle=0.0
+        )
+
+        num_segments = max(1, int(line_length / (construction_rate * 10)))
+
+        line_positions = []
+        for i in range(num_segments + 1):
+            t = i / max(1, num_segments)
+            x = start_position[0] + dx * t
+            y = start_position[1] + dy * t
+            line_positions.append((x, y))
+
+        if self._fire_model is not None:
+            self._fire_model.add_containment_line(line_positions)
+
+        return line_positions
 
     def _civilian_seek_help(self, agent: str, state: AgentState) -> None:
         """Civilian seeks help from responders."""
